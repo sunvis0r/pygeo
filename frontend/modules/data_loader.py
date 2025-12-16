@@ -66,7 +66,7 @@ def load_h_data(filepath: str) -> pd.DataFrame:
     """
     df = pd.read_csv(
         filepath,
-        sep=r"\s+",  # Исправлен escape-символ
+        sep=r"\s+",
         comment="#",
         names=["X", "Y", "Z", "Well", "H"]
     )
@@ -83,7 +83,7 @@ def load_eff_h_data(filepath: str) -> pd.DataFrame:
     """
     df = pd.read_csv(
         filepath,
-        sep=r"\s+",  # Исправлен escape-символ
+        sep=r"\s+",
         comment="#",
         names=["X", "Y", "Z", "Well", "EFF_H"]
     )
