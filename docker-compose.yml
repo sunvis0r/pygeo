@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:15-alpine
+    container_name: pygeo_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pygeo_db}
+      POSTGRES_USER: ${POSTGRES_USER:-pygeo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pygeo_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pygeo_user} -d ${POSTGRES_DB:-pygeo_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pygeo_network
+
+  # Streamlit приложение
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pygeo_app
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-pygeo_user}:${POSTGRES_PASSWORD:-pygeo_password}@postgres:5432/${POSTGRES_DB:-pygeo_db}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./src_data:/app/src_data:ro
+      - ./data:/app/data
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pygeo_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  pygeo_network:
+    driver: bridge

@@ -13,6 +13,14 @@ from frontend.modules.visualizer import create_2d_map, create_prediction_heatmap
     create_las_cross_section, create_well_comparison, create_3d_reservoir_layers, create_2d_well_projection, \
     create_2d_trajectory_projections
 
+# Импорт DatabaseManager
+try:
+    from backend.database import DatabaseManager
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+    print("⚠️ DatabaseManager не доступен. Работа только с файлами.")
+
 # Настройки страницы
 st.set_page_config(
     page_title="Визуализация данных скважин",
@@ -34,6 +42,77 @@ if 'well_data' not in st.session_state:
     st.session_state.well_data = None
 if 'las_data' not in st.session_state:
     st.session_state.las_data = None
+if 'db_manager' not in st.session_state:
+    st.session_state.db_manager = None
+if 'data_source' not in st.session_state:
+    st.session_state.data_source = os.getenv('DATA_SOURCE', 'database')
+if 'auto_load_attempted' not in st.session_state:
+    st.session_state.auto_load_attempted = False
+
+# Инициализация DatabaseManager при старте
+if DB_AVAILABLE and st.session_state.db_manager is None:
+    try:
+        st.session_state.db_manager = DatabaseManager()
+        print("✅ DatabaseManager инициализирован")
+    except Exception as e:
+        print(f"❌ Ошибка инициализации DatabaseManager: {e}")
+        st.session_state.db_manager = None
+
+# Автоматическая загрузка данных при старте
+if (not st.session_state.data_loaded and
+    not st.session_state.auto_load_attempted and
+    DB_AVAILABLE and
+    st.session_state.db_manager):
+    
+    st.session_state.auto_load_attempted = True
+    
+    with st.spinner("🔄 Проверка базы данных..."):
+        try:
+            # Проверяем есть ли данные в БД
+            well_data_from_db = st.session_state.db_manager.get_all_wells()
+            
+            if len(well_data_from_db) > 0:
+                # База НЕ пустая - загружаем из БД
+                print(f"✅ Найдено {len(well_data_from_db)} скважин в БД. Загружаем из базы данных...")
+                st.session_state.well_data = well_data_from_db
+                st.session_state.trajectories = st.session_state.db_manager.get_all_trajectories()
+                st.session_state.las_data = st.session_state.db_manager.get_all_las_data()
+                st.session_state.data_loaded = True
+                st.success(f"✅ Загружено из БД: {len(well_data_from_db)} скважин")
+            else:
+                # База пустая - загружаем из файлов и сохраняем в БД
+                print("⚠️ База данных пустая. Загружаем данные из файлов...")
+                
+                data_folder = "src_data"
+                traj_path = f"{data_folder}/INKL/траектории"
+                h_path = f"{data_folder}/dot_dtv/H"
+                eff_h_path = f"{data_folder}/dot_dtv/EFF_H"
+                las_folder = f"{data_folder}/"
+                
+                # Загружаем из файлов
+                st.session_state.trajectories = load_welltrajectories(traj_path)
+                st.session_state.well_data = combine_all_data(h_path, eff_h_path)
+                st.session_state.las_data = load_all_las_files(las_folder)
+                
+                # Сохраняем в БД
+                print("💾 Сохранение данных в базу данных...")
+                success = st.session_state.db_manager.load_data_from_files_to_db(
+                    st.session_state.well_data,
+                    st.session_state.trajectories,
+                    st.session_state.las_data
+                )
+                
+                if success:
+                    st.session_state.data_loaded = True
+                    st.success(f"✅ Загружено из файлов и сохранено в БД: {len(st.session_state.well_data)} скважин")
+                else:
+                    st.warning("⚠️ Данные загружены из файлов, но не удалось сохранить в БД")
+                    st.session_state.data_loaded = True
+                    
+        except Exception as e:
+            print(f"❌ Ошибка автоматической загрузки: {e}")
+            import traceback
+            traceback.print_exc()
 
 # Сайдбар
 with st.sidebar:
@@ -54,25 +133,51 @@ with st.sidebar:
     data_folder = "src_data"
     las_folder = f"{data_folder}/"
 
-    if st.button("Загрузить все данные", type="primary"):
-        with st.spinner("Загрузка данных..."):
+    # Показываем источник данных
+    if DB_AVAILABLE and st.session_state.db_manager:
+        if st.session_state.data_loaded:
+            # Определяем откуда были загружены данные
+            well_count_db = len(st.session_state.db_manager.get_all_wells())
+            if well_count_db > 0:
+                st.info(f"🗄️ Данные из базы данных ({well_count_db} скважин)")
+            else:
+                st.info("📁 Данные из файлов")
+    
+    if st.button("🔄 Перезагрузить данные", type="secondary"):
+        with st.spinner("Перезагрузка данных из файлов..."):
             try:
-                # Загружаем траектории
+                # Загружаем траектории из файлов
                 traj_path = f"{data_folder}/INKL/траектории"
                 st.session_state.trajectories = load_welltrajectories(traj_path)
 
-                # Загружаем данные по скважинам
+                # Загружаем данные по скважинам из файлов
                 h_path = f"{data_folder}/dot_dtv/H"
                 eff_h_path = f"{data_folder}/dot_dtv/EFF_H"
                 st.session_state.well_data = combine_all_data(h_path, eff_h_path)
 
                 # Загружаем LAS-файлы
                 st.session_state.las_data = load_all_las_files(las_folder)
+                
+                # Если доступна БД - сохраняем данные (перезаписываем)
+                if DB_AVAILABLE and st.session_state.db_manager:
+                    with st.spinner("💾 Обновление базы данных..."):
+                        success = st.session_state.db_manager.load_data_from_files_to_db(
+                            st.session_state.well_data,
+                            st.session_state.trajectories,
+                            st.session_state.las_data
+                        )
+                        if success:
+                            st.success("✅ Данные перезагружены из файлов и обновлены в БД!")
+                        else:
+                            st.warning("⚠️ Данные перезагружены из файлов, но не удалось обновить БД")
+                else:
+                    st.success("✅ Данные перезагружены из файлов!")
 
                 st.session_state.data_loaded = True
-                st.success("Данные успешно загружены!")
             except Exception as e:
-                st.error(f"Ошибка при загрузке данных: {e}")
+                st.error(f"Ошибка при перезагрузке данных: {e}")
+                import traceback
+                st.error(traceback.format_exc())
 
     if st.session_state.data_loaded:
         st.success(f"✅ Загружено: {len(st.session_state.trajectories)} скважин")

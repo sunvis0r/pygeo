@@ -14,9 +14,17 @@
 pygeo/
 ├── app.py                          # Main Streamlit application
 ├── README.md                       # Project documentation
+├── README_DOCKER.md                # Docker deployment guide
 ├── requirements.txt                # Python dependencies
-├── backend/                        # Backend modules (placeholder)
-│   └── __init__.py
+├── Dockerfile                      # Docker image definition
+├── docker-compose.yml              # Multi-container orchestration
+├── .env                            # Environment variables (not in git)
+├── .env.example                    # Environment variables template
+├── .gitignore                      # Git ignore rules
+├── backend/                        # Backend modules
+│   ├── __init__.py
+│   ├── database.py                # PostgreSQL database manager
+│   └── init_db.sql                # Database initialization script
 ├── frontend/                       # Frontend modules
 │   ├── __init__.py
 │   └── modules/
@@ -272,12 +280,14 @@ X Y Z Well EFF_H
 
 ## Dependencies (requirements.txt)
 ```
-streamlit          # Web application framework
-plotly             # Interactive plotting
-pandas             # Data manipulation
-numpy              # Numerical computing
-lasio              # LAS file reading
-scipy              # Scientific computing (interpolation)
+streamlit==1.31.0       # Web application framework
+plotly==5.18.0          # Interactive plotting
+pandas==2.2.0           # Data manipulation
+numpy==1.26.3           # Numerical computing
+lasio==0.31             # LAS file reading
+scipy==1.12.0           # Scientific computing (interpolation)
+psycopg2-binary==2.9.9  # PostgreSQL adapter
+python-dotenv==1.0.0    # Environment variables
 ```
 
 ---
@@ -424,5 +434,289 @@ scipy              # Scientific computing (interpolation)
 
 ---
 
+## Docker Infrastructure (Added 2025-12-16)
+
+### Overview
+Complete containerization with PostgreSQL database integration for production deployment.
+
+### Architecture
+```
+┌─────────────────────────────────────────┐
+│         Streamlit App (Port 8501)       │
+│  ┌───────────────────────────────────┐  │
+│  │  Frontend (Streamlit UI)          │  │
+│  │  - Visualization (Plotly)         │  │
+│  │  - Interactive controls           │  │
+│  └───────────────────────────────────┘  │
+│  ┌───────────────────────────────────┐  │
+│  │  Backend (Python)                 │  │
+│  │  - Data Loader (files)            │  │
+│  │  - Database Manager (PostgreSQL)  │  │
+│  │  - Preprocessor                   │  │
+│  └───────────────────────────────────┘  │
+└─────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────┐
+│      PostgreSQL Database (Port 5432)    │
+│  ┌───────────────────────────────────┐  │
+│  │  Tables:                          │  │
+│  │  - wells (скважины)               │  │
+│  │  - trajectories (траектории)      │  │
+│  │  - las_data (каротаж)             │  │
+│  └───────────────────────────────────┘  │
+└─────────────────────────────────────────┘
+```
+
+### Key Components
+
+#### 1. [`Dockerfile`](Dockerfile:1)
+- **Base Image:** python:3.11-slim
+- **System Dependencies:** gcc, postgresql-client, build-essential
+- **Working Directory:** /app
+- **Exposed Port:** 8501
+- **Healthcheck:** HTTP check on /healthz endpoint
+- **Entry Point:** streamlit run app.py
+
+#### 2. [`docker-compose.yml`](docker-compose.yml:1)
+**Services:**
+- **postgres:**
+  - Image: postgres:15-alpine
+  - Database: pygeo_db
+  - User: pygeo_user
+  - Port: 5432
+  - Volume: postgres_data (persistent storage)
+  - Healthcheck: pg_isready
+  
+- **app:**
+  - Build: Current directory
+  - Depends on: postgres
+  - Port: 8501
+  - Volumes:
+    - src_data (read-only) - source data files
+    - data (read-write) - application data
+  - Environment: DATABASE_URL, DATA_SOURCE
+  - Restart: unless-stopped
+
+#### 3. [`backend/database.py`](backend/database.py:1)
+**Class:** DatabaseManager
+
+**Connection Management:**
+- Uses psycopg2.pool.SimpleConnectionPool
+- Min connections: 1
+- Max connections: 10
+- Automatic connection lifecycle management
+
+**Key Methods:**
+- `save_well(name, x, y, z, h, eff_h, collector_ratio)` - Save well data
+- `get_all_wells()` - Retrieve all wells
+- `save_trajectory(well_id, x, y, z, md)` - Save trajectory point
+- `get_all_trajectories()` - Retrieve all trajectories
+- `save_las_data(well_id, depth, curve_value)` - Save LAS data
+- `get_all_las_data()` - Retrieve all LAS data
+- `load_data_from_files_to_db()` - Bulk load from src_data files
+
+**Error Handling:**
+- Try-except blocks for all database operations
+- Automatic connection return to pool
+- Graceful degradation on errors
+
+#### 4. [`backend/init_db.sql`](backend/init_db.sql:1)
+**Database Schema:**
+
+**Table: wells**
+- id (SERIAL PRIMARY KEY)
+- name (VARCHAR(50) UNIQUE NOT NULL)
+- x, y, z (DOUBLE PRECISION)
+- h, eff_h (DOUBLE PRECISION)
+- collector_ratio (DOUBLE PRECISION)
+- created_at, updated_at (TIMESTAMP)
+
+**Table: trajectories**
+- id (SERIAL PRIMARY KEY)
+- well_id (INTEGER REFERENCES wells)
+- x, y, z, md (DOUBLE PRECISION)
+- created_at (TIMESTAMP)
+- Index on well_id for fast lookups
+
+**Table: las_data**
+- id (SERIAL PRIMARY KEY)
+- well_id (INTEGER REFERENCES wells)
+- depth (DOUBLE PRECISION)
+- curve_value (DOUBLE PRECISION)
+- created_at (TIMESTAMP)
+- Index on well_id for fast lookups
+
+**Triggers:**
+- update_wells_updated_at - Auto-update timestamp on wells table
+
+### Environment Variables
+
+**Required (.env file):**
+```bash
+POSTGRES_DB=pygeo_db
+POSTGRES_USER=pygeo_user
+POSTGRES_PASSWORD=your_secure_password
+DATABASE_URL=postgresql://pygeo_user:your_secure_password@postgres:5432/pygeo_db
+DATA_SOURCE=database  # or 'files'
+```
+
+### Data Source Modes
+
+**1. Files Mode (DATA_SOURCE=files)**
+- Loads data from src_data/ directory
+- Uses existing data_loader.py functions
+- No database required
+- Default behavior
+
+**2. Database Mode (DATA_SOURCE=database)**
+- Loads data from PostgreSQL
+- Uses DatabaseManager class
+- Persistent storage
+- Multi-user support
+
+### Deployment Commands
+
+**Start services:**
+```bash
+docker-compose up -d
+```
+
+**View logs:**
+```bash
+docker-compose logs -f app
+docker-compose logs -f postgres
+```
+
+**Stop services:**
+```bash
+docker-compose down
+```
+
+**Rebuild after changes:**
+```bash
+docker-compose up -d --build
+```
+
+**Database backup:**
+```bash
+docker exec pygeo_postgres pg_dump -U pygeo_user pygeo_db > backup.sql
+```
+
+**Database restore:**
+```bash
+docker exec -i pygeo_postgres psql -U pygeo_user pygeo_db < backup.sql
+```
+
+### Volumes
+
+**postgres_data:**
+- Purpose: Persistent PostgreSQL data
+- Location: Docker managed volume
+- Survives container restarts
+
+**src_data:**
+- Purpose: Source data files (LAS, trajectories, etc.)
+- Mount: ./src_data:/app/src_data:ro (read-only)
+- Prevents accidental modification
+
+**data:**
+- Purpose: Application runtime data
+- Mount: ./data:/app/data
+- Read-write access
+
+### Network
+
+**pygeo_network:**
+- Type: Bridge network
+- Purpose: Inter-container communication
+- Services: app, postgres
+- DNS: Automatic service name resolution
+
+### Health Checks
+
+**PostgreSQL:**
+- Command: pg_isready -U pygeo_user
+- Interval: 10s
+- Timeout: 5s
+- Retries: 5
+
+**Application:**
+- Command: curl -f http://localhost:8501/healthz
+- Interval: 30s
+- Timeout: 10s
+- Retries: 3
+
+### Security Considerations
+
+**Production Checklist:**
+- [ ] Change default passwords in .env
+- [ ] Use secrets management (Docker secrets, Vault)
+- [ ] Enable SSL/TLS for PostgreSQL
+- [ ] Configure firewall rules
+- [ ] Use reverse proxy (nginx) with HTTPS
+- [ ] Implement authentication for Streamlit
+- [ ] Regular security updates
+- [ ] Database backups automation
+
+### Performance Optimization
+
+**Database:**
+- Connection pooling (1-10 connections)
+- Indexes on foreign keys
+- Batch inserts for bulk operations
+
+**Application:**
+- Read-only mount for source data
+- Efficient data loading strategies
+- Session state caching
+
+### Monitoring
+
+**Logs:**
+- Application: docker-compose logs app
+- Database: docker-compose logs postgres
+- Combined: docker-compose logs -f
+
+**Metrics:**
+- Container stats: docker stats
+- Database connections: SELECT count(*) FROM pg_stat_activity;
+- Disk usage: docker system df
+
+### Troubleshooting
+
+**Issue: Container won't start**
+```bash
+docker-compose logs app
+docker-compose ps
+```
+
+**Issue: Database connection failed**
+```bash
+docker-compose exec postgres pg_isready -U pygeo_user
+docker-compose restart postgres
+```
+
+**Issue: Port already in use**
+- Change port in docker-compose.yml
+- Or stop conflicting service
+
+**Issue: Data not persisting**
+- Check volume mounts
+- Verify postgres_data volume exists: docker volume ls
+
+### Future Enhancements
+
+**Planned:**
+- [ ] Redis cache layer
+- [ ] Nginx reverse proxy
+- [ ] SSL/TLS certificates
+- [ ] Automated backups
+- [ ] Monitoring dashboard (Grafana)
+- [ ] CI/CD pipeline
+- [ ] Kubernetes deployment
+- [ ] Multi-stage Docker builds
+
+---
+
 *Last Updated: 2025-12-16*
-*Version: 1.1*
+*Version: 1.2 - Docker Infrastructure Added*
