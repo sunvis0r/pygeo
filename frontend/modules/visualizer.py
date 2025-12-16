@@ -112,10 +112,6 @@ def create_3d_trajectories(trajectories: Dict[str, np.ndarray]) -> go.Figure:
             xaxis_title="X",
             yaxis_title="Y",
             zaxis_title="Глубина Z",
-            zaxis=dict(
-                autorange="reversed",
-                title="Глубина (чем ниже - тем глубже)"
-            ),
             aspectmode="manual",
             aspectratio=dict(x=1, y=1, z=0.7)
         ),
