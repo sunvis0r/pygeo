@@ -10,7 +10,7 @@ import streamlit as st
 from frontend.modules.data_loader import load_all_las_files, combine_all_data, load_welltrajectories
 from frontend.modules.preprocess import create_grid_from_points, filter_by_depth
 from frontend.modules.visualizer import create_2d_map, create_prediction_heatmap, create_3d_trajectories, \
-    create_las_cross_section, create_well_comparison
+    create_las_cross_section, create_well_comparison, create_3d_reservoir_layers, create_2d_well_projection
 
 # Настройки страницы
 st.set_page_config(
@@ -41,7 +41,7 @@ with st.sidebar:
     # Переключение режимов
     view_mode = st.radio(
         "Режим просмотра:",
-        ["Карта", "3D траектории", "Разрезы", "Анализ"],
+        ["Карта", "3D траектории", "3D пласты коллекторов", "2D проекция скважины", "Разрезы", "Анализ"],
         index=0
     )
 
@@ -221,6 +221,123 @@ else:
                     st.text(f"Глубина: {traj[-1, 2]:.1f} м")
                     st.divider()
 
+    # Режим 3D ПЛАСТЫ КОЛЛЕКТОРОВ
+    elif view_mode == "3D пласты коллекторов":
+        st.header("🏔️ 3D визуализация пластов-коллекторов")
+        
+        st.info("💡 Желтая поверхность = коллектор, серая = неколлектор. Зеленые линии на стволах = коллектор, серые = неколлектор")
+        
+        col1, col2 = st.columns([4, 1])
+        
+        with col2:
+            st.markdown("#### Настройки отображения")
+            
+            # Показать маркеры коллекторов
+            show_logs = st.checkbox("Маркеры коллекторов", value=True)
+            
+            # Показать траектории
+            show_trajectories = st.checkbox("Показать траектории", value=True)
+            
+            # Показать вертикальные линии скважин
+            show_vertical = st.checkbox("Вертикальные линии", value=True)
+            
+            st.markdown("#### Статистика")
+            st.metric("Всего скважин", len(st.session_state.well_data))
+            
+            avg_h = st.session_state.well_data["H"].mean()
+            st.metric("Средняя мощность H", f"{avg_h:.2f} м")
+            
+            avg_eff_h = st.session_state.well_data["EFF_H"].mean()
+            st.metric("Средняя эфф. мощность", f"{avg_eff_h:.2f} м")
+            
+            avg_collector = st.session_state.well_data["Доля_коллектора"].mean() * 100
+            st.metric("Средняя доля коллектора", f"{avg_collector:.1f}%")
+            
+            if st.session_state.las_data:
+                st.metric("LAS файлов загружено", len(st.session_state.las_data))
+            
+            st.markdown("#### Легенда")
+            st.markdown("""
+            **Поверхности:**
+            - 🟡 **Желтая** - кровля пласта (коллектор)
+            - 🟠 **Оранжевая** - высокая доля коллектора
+            - ⚪ **Серая** - подошва пласта
+            
+            **Маркеры на стволах:**
+            - 🟢 **Зеленая линия** - коллектор (1)
+            - ⚫ **Серая линия** - неколлектор (0)
+            - ⬛ **Черная линия** - ствол скважины
+            """)
+        
+        with col1:
+            # Создаем 3D визуализацию пластов с каротажными диаграммами
+            # ВАЖНО: траектории нужны всегда для корректного маппинга MD -> Z
+            fig_3d_layers = create_3d_reservoir_layers(
+                st.session_state.well_data,
+                st.session_state.trajectories,  # Всегда передаем траектории
+                st.session_state.las_data,
+                show_trajectories=show_trajectories,
+                show_vertical_layers=show_vertical,
+                show_well_logs=show_logs
+            )
+            st.plotly_chart(fig_3d_layers, use_container_width=True)
+    
+    # Режим 2D ПРОЕКЦИЯ СКВАЖИНЫ
+    elif view_mode == "2D проекция скважины":
+        st.header("📊 2D проекция скважины с слоями")
+        
+        st.info("💡 Выберите скважину для просмотра её 2D проекции с отображением слоев коллекторов и неколлекторов")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col2:
+            st.markdown("#### Выбор скважины")
+            
+            # Список скважин
+            well_list = sorted(st.session_state.well_data["Well"].tolist())
+            selected_well = st.selectbox(
+                "Скважина:",
+                well_list,
+                index=0
+            )
+            
+            # Информация о выбранной скважине
+            if selected_well:
+                well_info = st.session_state.well_data[
+                    st.session_state.well_data["Well"] == selected_well
+                ].iloc[0]
+                
+                st.markdown("#### Информация")
+                st.metric("Координата X", f"{well_info['X']:.2f} м")
+                st.metric("Координата Y", f"{well_info['Y']:.2f} м")
+                st.metric("Кровля Z", f"{well_info['Z']:.2f} м")
+                st.metric("Мощность H", f"{well_info['H']:.2f} м")
+                st.metric("Эфф. мощность", f"{well_info['EFF_H']:.2f} м")
+                st.metric("Доля коллектора", f"{well_info['Доля_коллектора']*100:.1f}%")
+                
+                st.markdown("#### Легенда")
+                st.markdown("""
+                - 🟢 **Зеленый** - коллектор (1)
+                - ⚪ **Серый** - неколлектор (0)
+                - 🔴 **Красная линия** - каротажная кривая
+                - ⬛ **Черная линия** - ствол скважины
+                - 🔵 **Синий треугольник** - кровля пласта
+                - 🔴 **Красный треугольник** - подошва пласта
+                """)
+        
+        with col1:
+            if selected_well:
+                # Создаем 2D проекцию с траекториями для точного преобразования MD -> Z
+                fig_2d_proj = create_2d_well_projection(
+                    st.session_state.well_data,
+                    st.session_state.las_data,
+                    selected_well,
+                    st.session_state.trajectories
+                )
+                st.plotly_chart(fig_2d_proj, use_container_width=True)
+            else:
+                st.warning("Выберите скважину для отображения")
+    
     # Режим РАЗРЕЗЫ
     elif view_mode == "Разрезы":
         st.header("📐 Геофизические разрезы")
