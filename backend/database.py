@@ -163,20 +163,22 @@ class DatabaseManager:
             return False
         
         try:
-            # Получаем ID скважины
-            well = self.get_well_by_name(well_name)
-            if not well:
-                # Создаем скважину если её нет
-                well_id = self.save_well(
-                    well_name,
-                    trajectory[0, 0],
-                    trajectory[0, 1],
-                    trajectory[0, 2]
-                )
-            else:
-                well_id = well['id']
-            
             with conn.cursor() as cur:
+                # Получаем ID скважины используя то же соединение
+                cur.execute("SELECT id FROM wells WHERE name = %s", (well_name,))
+                row = cur.fetchone()
+                
+                if not row:
+                    # Создаем скважину если её нет
+                    cur.execute("""
+                        INSERT INTO wells (name, x, y, z)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING id
+                    """, (well_name, float(trajectory[0, 0]), float(trajectory[0, 1]), float(trajectory[0, 2])))
+                    well_id = cur.fetchone()[0]
+                else:
+                    well_id = row[0]
+                
                 # Удаляем старые точки траектории
                 cur.execute("DELETE FROM trajectories WHERE well_id = %s", (well_id,))
                 
@@ -195,7 +197,9 @@ class DatabaseManager:
                 return True
         except Exception as e:
             conn.rollback()
-            print(f"Ошибка сохранения траектории: {e}")
+            print(f"Ошибка сохранения траектории {well_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
         finally:
             self.put_connection(conn)

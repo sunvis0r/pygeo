@@ -158,17 +158,31 @@ def combine_all_data(h_path: str, eff_h_path: str) -> pd.DataFrame:
     df_h = load_h_data(h_path)
     df_eff = load_eff_h_data(eff_h_path)
 
-    # Объединяем по координатам и названию скважины
-    df = pd.merge(df_h, df_eff, on=["Well", "X", "Y", "Z"])
+    # Объединяем по названию скважины (left join, чтобы сохранить все скважины из H)
+    # Координаты должны быть одинаковыми для одной скважины
+    df = pd.merge(df_h, df_eff, on="Well", how='left', suffixes=('_H', '_EFF'))
 
-    # Удаляем строки с NaN в числовых колонках
-    df = df.dropna(subset=['H', 'EFF_H'])
+    # Оставляем координаты из файла H, переименовываем колонки
+    df = df.rename(columns={'X_H': 'X', 'Y_H': 'Y', 'Z_H': 'Z'})
 
-    # Рассчитываем долю коллектора (защита от деления на ноль)
-    df["Доля_коллектора"] = df.apply(
-        lambda row: row["EFF_H"] / row["H"] if row["H"] > 0 else 0,
-        axis=1
-    )
+    # Удаляем дублирующие колонки координат из EFF_H (если они есть)
+    columns_to_drop = ['X_EFF', 'Y_EFF', 'Z_EFF']
+    existing_columns = [col for col in columns_to_drop if col in df.columns]
+    if existing_columns:
+        df = df.drop(columns=existing_columns)
+
+    # Удаляем строки с пустыми именами скважин
+    df = df.dropna(subset=['Well'])
+
+    # Рассчитываем долю коллектора (защита от деления на ноль и NaN)
+    def calculate_collector_ratio(row):
+        h = row["H"]
+        eff_h = row["EFF_H"]
+        if pd.isna(h) or pd.isna(eff_h) or h <= 0:
+            return None  # или 0, в зависимости от требований
+        return eff_h / h
+
+    df["Доля_коллектора"] = df.apply(calculate_collector_ratio, axis=1)
 
     # Сортируем по названию скважины
     df = df.sort_values("Well")
