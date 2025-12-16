@@ -744,10 +744,40 @@ else:
                             md_points
                         ])
                         
-                        # Добавляем в траектории
+                        # Добавляем в траектории (в памяти)
                         st.session_state.trajectories[well_name] = new_trajectory
                         
-                        st.success(f"✅ Скважина {well_name} успешно добавлена!")
+                        # Сохраняем в базу данных
+                        if DB_AVAILABLE and st.session_state.db_manager:
+                            try:
+                                # Сохраняем скважину
+                                well_id = st.session_state.db_manager.save_well(
+                                    well_name,
+                                    x_coord,
+                                    y_coord,
+                                    z1_coord,
+                                    None,  # H
+                                    None   # EFF_H
+                                )
+                                
+                                if well_id:
+                                    # Сохраняем траекторию
+                                    success = st.session_state.db_manager.save_trajectory(
+                                        well_name,
+                                        new_trajectory
+                                    )
+                                    
+                                    if success:
+                                        st.success(f"✅ Скважина {well_name} добавлена и сохранена в БД!")
+                                    else:
+                                        st.warning(f"⚠️ Скважина {well_name} добавлена, но траектория не сохранена в БД")
+                                else:
+                                    st.warning(f"⚠️ Скважина {well_name} добавлена, но не сохранена в БД")
+                            except Exception as e:
+                                st.warning(f"⚠️ Скважина {well_name} добавлена, но ошибка сохранения в БД: {e}")
+                        else:
+                            st.success(f"✅ Скважина {well_name} успешно добавлена!")
+                        
                         st.balloons()
                         
                         # Показываем информацию
