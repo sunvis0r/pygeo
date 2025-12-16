@@ -413,20 +413,22 @@ else:
                 )
                 
                 if projections:
-                    # Отображаем проекции в табах
-                    tab1, tab2, tab3 = st.tabs(["📍 Проекция XY", "📏 Проекция XZ", "📐 Проекция YZ"])
+                    # Отображаем все три проекции одновременно
+                    st.markdown("### 📍 Проекция XY (вид сверху)")
+                    st.plotly_chart(projections['XY'], use_container_width=True)
+                    st.caption("Вид сверху: показывает горизонтальное отклонение скважины")
                     
-                    with tab1:
-                        st.plotly_chart(projections['XY'], use_container_width=True)
-                        st.caption("Вид сверху: показывает горизонтальное отклонение скважины")
+                    st.divider()
                     
-                    with tab2:
-                        st.plotly_chart(projections['XZ'], use_container_width=True)
-                        st.caption("Вид сбоку (X-Z): показывает отклонение по оси X и глубину")
+                    st.markdown("### 📏 Проекция XZ (вид сбоку)")
+                    st.plotly_chart(projections['XZ'], use_container_width=True)
+                    st.caption("Вид сбоку (X-Z): показывает отклонение по оси X и глубину")
                     
-                    with tab3:
-                        st.plotly_chart(projections['YZ'], use_container_width=True)
-                        st.caption("Вид сбоку (Y-Z): показывает отклонение по оси Y и глубину")
+                    st.divider()
+                    
+                    st.markdown("### 📐 Проекция YZ (вид сбоку)")
+                    st.plotly_chart(projections['YZ'], use_container_width=True)
+                    st.caption("Вид сбоку (Y-Z): показывает отклонение по оси Y и глубину")
                 else:
                     st.warning(f"Не удалось создать проекции для {selected_well}")
             else:

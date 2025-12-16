@@ -978,7 +978,6 @@ def create_2d_trajectory_projections(well_name: str, trajectories: Dict[str, np.
         title=f'Проекция XZ (вид сбоку) - {well_name}',
         xaxis_title='X (м)',
         yaxis_title='Глубина Z (м)',
-        yaxis=dict(autorange='reversed'),  # Z увеличивается вниз
         height=500,
         hovermode='closest',
         template='plotly_white',
@@ -994,7 +993,6 @@ def create_2d_trajectory_projections(well_name: str, trajectories: Dict[str, np.
         title=f'Проекция YZ (вид сбоку) - {well_name}',
         xaxis_title='Y (м)',
         yaxis_title='Глубина Z (м)',
-        yaxis=dict(autorange='reversed'),  # Z увеличивается вниз
         height=500,
         hovermode='closest',
         template='plotly_white',
