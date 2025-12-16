@@ -287,19 +287,22 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, 
                                 las_data: Dict[str, Dict] = None, show_trajectories: bool = True,
                                 show_vertical_layers: bool = True, show_well_logs: bool = True) -> go.Figure:
     """
-    Создает 3D визуализацию траекторий скважин с окраской по типу коллектора
-    Траектории окрашиваются: зеленый = коллектор, серый = неколлектор
+    Создает 3D визуализацию траекторий скважин с наложением слоев коллекторов
+    
+    Двухслойная визуализация:
+    1. Базовый слой: все траектории скважин (бледно-синие линии)
+    2. Верхний слой: слои коллекторов (зеленый/серый) поверх траекторий
     
     Аргументы:
         well_data: DataFrame с данными скважин (X, Y, Z, H, EFF_H)
         trajectories: словарь с траекториями скважин (обязательно)
-        las_data: словарь с LAS-данными (обязательно для окраски)
+        las_data: словарь с LAS-данными (для отображения слоев коллекторов)
         show_trajectories: не используется (оставлено для совместимости)
         show_vertical_layers: не используется (оставлено для совместимости)
-        show_well_logs: показывать окраску коллекторов на траекториях
+        show_well_logs: показывать слои коллекторов поверх траекторий
     
     Возвращает:
-        3D Figure с траекториями, окрашенными по типу коллектора
+        3D Figure с двухслойной визуализацией
     """
     fig = go.Figure()
     
@@ -308,8 +311,9 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, 
     
     layers_added = 0
     wells_processed = 0
+    wells_with_layers = 0
     
-    # Обрабатываем каждую скважину
+    # ПЕРВЫЙ ПРОХОД: Рисуем ВСЕ базовые траектории (бледно-синие)
     for well_name, trajectory in trajectories.items():
         if len(trajectory) < 2:
             continue
@@ -320,89 +324,7 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, 
         traj_z = trajectory[:, 2]
         traj_md = trajectory[:, 3]
         
-        # Если нужно показать слои коллекторов И есть LAS данные
-        if show_well_logs and las_data and well_name in las_data:
-            las = las_data[well_name]
-            depth = las['depth']  # MD
-            curve = las['curve']
-            null_value = las.get('null_value', -999.25)
-            
-            # Фильтруем валидные данные
-            valid_mask = (curve != null_value) & (~np.isnan(curve))
-            
-            if np.any(valid_mask):
-                depth_valid = depth[valid_mask]
-                curve_valid = curve[valid_mask]
-                
-                # Проверяем диапазоны MD
-                las_md_min, las_md_max = depth_valid.min(), depth_valid.max()
-                traj_md_min, traj_md_max = traj_md.min(), traj_md.max()
-                
-                # Если диапазоны пересекаются
-                if not (las_md_max < traj_md_min or las_md_min > traj_md_max):
-                    # Интерполируем координаты по MD
-                    x_coords = np.interp(depth_valid, traj_md, traj_x)
-                    y_coords = np.interp(depth_valid, traj_md, traj_y)
-                    z_coords = np.interp(depth_valid, traj_md, traj_z)
-                    
-                    # Рисуем сегменты траектории с окраской по типу коллектора
-                    i = 0
-                    while i < len(curve_valid):
-                        current_value = curve_valid[i]
-                        start_idx = i
-                        
-                        # Находим конец текущего сегмента
-                        while i < len(curve_valid) and curve_valid[i] == current_value:
-                            i += 1
-                        end_idx = i - 1
-                        
-                        # Определяем цвет и ширину
-                        if current_value == 1:  # Коллектор
-                            color = 'green'
-                            width = 8
-                            name = 'Коллектор'
-                        elif current_value == 0:  # Неколлектор
-                            color = 'gray'
-                            width = 6
-                            name = 'Неколлектор'
-                        else:
-                            continue
-                        
-                        # Рисуем сегмент траектории
-                        segment_x = x_coords[start_idx:end_idx+1]
-                        segment_y = y_coords[start_idx:end_idx+1]
-                        segment_z = z_coords[start_idx:end_idx+1]
-                        
-                        fig.add_trace(go.Scatter3d(
-                            x=segment_x,
-                            y=segment_y,
-                            z=segment_z,
-                            mode='lines',
-                            line=dict(color=color, width=width),
-                            name=well_name if layers_added == 0 else None,
-                            showlegend=(layers_added == 0),
-                            legendgroup=well_name,
-                            hovertemplate=f"{well_name}<br>{name}<br>Z: %{{z:.1f}}<extra></extra>"
-                        ))
-                        layers_added += 1
-                    
-                    # Добавляем маркеры начала и конца траектории
-                    fig.add_trace(go.Scatter3d(
-                        x=[traj_x[0], traj_x[-1]],
-                        y=[traj_y[0], traj_y[-1]],
-                        z=[traj_z[0], traj_z[-1]],
-                        mode="markers",
-                        marker=dict(
-                            size=6,
-                            color=['blue', 'red'],
-                            symbol=['circle', 'diamond']
-                        ),
-                        showlegend=False,
-                        hoverinfo="skip"
-                    ))
-                    continue
-        
-        # Если нет LAS данных или не нужно показывать слои - рисуем обычную траекторию
+        # Рисуем базовую траекторию (бледно-синяя, тонкая линия)
         fig.add_trace(go.Scatter3d(
             x=traj_x,
             y=traj_y,
@@ -410,15 +332,16 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, 
             mode="lines",
             name=well_name,
             line=dict(
-                width=4,
+                width=3,
                 color='lightblue'
             ),
             hoverinfo="name+z",
             hovertemplate=f"{well_name}<br>Z: %{{z:.1f}}<br>MD: %{{customdata:.1f}}<extra></extra>",
-            customdata=traj_md
+            customdata=traj_md,
+            showlegend=True
         ))
         
-        # Маркеры начала и конца
+        # Маркеры начала (синий круг) и конца (красный ромб)
         fig.add_trace(go.Scatter3d(
             x=[traj_x[0], traj_x[-1]],
             y=[traj_y[0], traj_y[-1]],
@@ -432,6 +355,88 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, 
             showlegend=False,
             hoverinfo="skip"
         ))
+    
+    # ВТОРОЙ ПРОХОД: Добавляем слои коллекторов ПОВЕРХ траекторий
+    if show_well_logs and las_data:
+        for well_name, trajectory in trajectories.items():
+            if len(trajectory) < 2:
+                continue
+            
+            # Проверяем наличие LAS данных
+            if well_name not in las_data:
+                continue
+            
+            traj_x = trajectory[:, 0]
+            traj_y = trajectory[:, 1]
+            traj_z = trajectory[:, 2]
+            traj_md = trajectory[:, 3]
+            
+            las = las_data[well_name]
+            depth = las['depth']  # MD
+            curve = las['curve']
+            null_value = las.get('null_value', -999.25)
+            
+            # Фильтруем валидные данные
+            valid_mask = (curve != null_value) & (~np.isnan(curve))
+            if not np.any(valid_mask):
+                continue
+            
+            depth_valid = depth[valid_mask]
+            curve_valid = curve[valid_mask]
+            
+            # Проверяем диапазоны MD
+            las_md_min, las_md_max = depth_valid.min(), depth_valid.max()
+            traj_md_min, traj_md_max = traj_md.min(), traj_md.max()
+            
+            # Если диапазоны не пересекаются - пропускаем
+            if las_md_max < traj_md_min or las_md_min > traj_md_max:
+                continue
+            
+            # Интерполируем координаты по MD
+            x_coords = np.interp(depth_valid, traj_md, traj_x)
+            y_coords = np.interp(depth_valid, traj_md, traj_y)
+            z_coords = np.interp(depth_valid, traj_md, traj_z)
+            
+            wells_with_layers += 1
+            
+            # Рисуем сегменты слоев коллекторов ПОВЕРХ базовой траектории
+            i = 0
+            while i < len(curve_valid):
+                current_value = curve_valid[i]
+                start_idx = i
+                
+                # Находим конец текущего сегмента
+                while i < len(curve_valid) and curve_valid[i] == current_value:
+                    i += 1
+                end_idx = i - 1
+                
+                # Определяем цвет и ширину (толще базовой траектории)
+                if current_value == 1:  # Коллектор
+                    color = 'green'
+                    width = 8  # Толще базовой линии
+                    name = 'Коллектор'
+                elif current_value == 0:  # Неколлектор
+                    color = 'gray'
+                    width = 6  # Толще базовой линии
+                    name = 'Неколлектор'
+                else:
+                    continue
+                
+                # Рисуем сегмент слоя ПОВЕРХ траектории
+                segment_x = x_coords[start_idx:end_idx+1]
+                segment_y = y_coords[start_idx:end_idx+1]
+                segment_z = z_coords[start_idx:end_idx+1]
+                
+                fig.add_trace(go.Scatter3d(
+                    x=segment_x,
+                    y=segment_y,
+                    z=segment_z,
+                    mode='lines',
+                    line=dict(color=color, width=width),
+                    showlegend=False,  # Не показываем в легенде каждый сегмент
+                    hovertemplate=f"{well_name}<br>{name}<br>Z: %{{z:.1f}}<extra></extra>"
+                ))
+                layers_added += 1
     
     # Добавляем легенду для типов коллекторов
     if layers_added > 0:
@@ -451,10 +456,19 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, 
             showlegend=True
         ))
     
+    # Добавляем легенду для базовой траектории
+    fig.add_trace(go.Scatter3d(
+        x=[None], y=[None], z=[None],
+        mode='lines',
+        line=dict(color='lightblue', width=3),
+        name='Траектория скважины',
+        showlegend=True
+    ))
+    
     # Формируем заголовок
     title_text = "3D визуализация пластов-коллекторов"
     if layers_added > 0:
-        title_text += f" ({wells_processed} скважин, {layers_added} сегментов)"
+        title_text += f" ({wells_processed} скважин: {wells_with_layers} с данными коллекторов, {layers_added} сегментов)"
     else:
         title_text += f" ({wells_processed} скважин)"
     
