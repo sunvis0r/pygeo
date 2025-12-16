@@ -9,40 +9,150 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 
-def create_2d_map(df: pd.DataFrame, show_well_names: bool = True) -> go.Figure:
+def create_2d_map(df: pd.DataFrame, trajectories: Dict[str, np.ndarray] = None,
+                  show_well_names: bool = True, show_trajectories: bool = True) -> go.Figure:
     """
-    Создает 2D карту скважин
+    Создает 2D карту ВСЕХ скважин с траекториями (вид сверху - проекция XY)
+    
+    Аргументы:
+        df: DataFrame с данными скважин (для окраски по доле коллектора)
+        trajectories: словарь с траекториями скважин (опционально)
+        show_well_names: показывать названия скважин
+        show_trajectories: показывать траектории скважин
     """
     fig = go.Figure()
+    
+    # 1. Сначала рисуем траектории скважин (если есть)
+    if show_trajectories and trajectories:
+        colors = px.colors.qualitative.Plotly
+        
+        for i, (well_name, trajectory) in enumerate(trajectories.items()):
+            if len(trajectory) < 2:
+                continue
+            
+            traj_x = trajectory[:, 0]
+            traj_y = trajectory[:, 1]
+            
+            color = colors[i % len(colors)]
+            
+            # Рисуем траекторию (тонкая линия)
+            fig.add_trace(go.Scatter(
+                x=traj_x,
+                y=traj_y,
+                mode='lines',
+                line=dict(color=color, width=2),
+                name=well_name,
+                showlegend=False,
+                hoverinfo='skip',
+                opacity=0.6
+            ))
+            
+            # Добавляем стрелку направления (от начала к концу)
+            # Берем последние 2 точки для направления
+            if len(traj_x) >= 2:
+                # Вектор направления
+                dx = traj_x[-1] - traj_x[-2]
+                dy = traj_y[-1] - traj_y[-2]
+                
+                # Нормализуем и масштабируем для стрелки
+                length = np.sqrt(dx**2 + dy**2)
+                if length > 0:
+                    dx = dx / length * 50  # Длина стрелки
+                    dy = dy / length * 50
+                    
+                    # Рисуем стрелку в конце траектории
+                    fig.add_annotation(
+                        x=traj_x[-1],
+                        y=traj_y[-1],
+                        ax=traj_x[-1] - dx,
+                        ay=traj_y[-1] - dy,
+                        xref='x',
+                        yref='y',
+                        axref='x',
+                        ayref='y',
+                        showarrow=True,
+                        arrowhead=2,
+                        arrowsize=1,
+                        arrowwidth=2,
+                        arrowcolor=color,
+                        opacity=0.7
+                    )
 
-    # Точки скважин
+    # 2. Затем рисуем точки ВСЕХ скважин (поверх траекторий)
+    # Объединяем данные из df (well_data) и trajectories
+    all_wells_x = []
+    all_wells_y = []
+    all_wells_names = []
+    all_wells_colors = []
+    all_wells_hover = []
+    
+    # Сначала добавляем скважины из df (с данными о коллекторе)
+    for _, row in df.iterrows():
+        all_wells_x.append(row["X"])
+        all_wells_y.append(row["Y"])
+        all_wells_names.append(row["Well"])
+        all_wells_colors.append(row["Доля_коллектора"])
+        all_wells_hover.append(
+            f"{row['Well']}<br>X: {row['X']:.1f}<br>Y: {row['Y']:.1f}<br>"
+            f"H: {row['H']:.2f} м<br>EFF_H: {row['EFF_H']:.2f} м<br>"
+            f"Доля: {row['Доля_коллектора']:.2%}"
+        )
+    
+    # Затем добавляем скважины из траекторий, которых нет в df
+    if trajectories:
+        df_wells = set(df["Well"].values)
+        for well_name, trajectory in trajectories.items():
+            if len(trajectory) == 0:
+                continue
+            
+            # Если скважины нет в df - добавляем из траектории
+            if well_name not in df_wells:
+                x_start = trajectory[0, 0]
+                y_start = trajectory[0, 1]
+                
+                all_wells_x.append(x_start)
+                all_wells_y.append(y_start)
+                all_wells_names.append(well_name)
+                all_wells_colors.append(0.5)  # Средний цвет для скважин без данных
+                all_wells_hover.append(
+                    f"{well_name}<br>X: {x_start:.1f}<br>Y: {y_start:.1f}<br>"
+                    f"Нет данных о мощности и коллекторе"
+                )
+    
+    # Рисуем все точки скважин
     fig.add_trace(go.Scatter(
-        x=df["X"],
-        y=df["Y"],
+        x=all_wells_x,
+        y=all_wells_y,
         mode="markers" + ("+text" if show_well_names else ""),
-        text=df["Well"] if show_well_names else None,
+        text=all_wells_names if show_well_names else None,
         textposition="top center",
         marker=dict(
             size=15,
-            color=df["Доля_коллектора"],
+            color=all_wells_colors,
             colorscale="Viridis",
             showscale=True,
             colorbar=dict(
                 title="Доля коллектора"
             ),
-            line=dict(width=2, color="black")
+            line=dict(width=2, color="black"),
+            cmin=0,
+            cmax=1
         ),
         hoverinfo="text",
-        hovertext=[f"{row['Well']}<br>Доля: {row['Доля_коллектора']:.2%}"
-                   for _, row in df.iterrows()],
-        name="Скважины"
+        hovertext=all_wells_hover,
+        name="Скважины",
+        showlegend=False
     ))
 
     # Настройки макета
+    title_text = "Карта скважин (вид сверху)"
+    if show_trajectories and trajectories:
+        title_text += f" - {len(trajectories)} скважин с траекториями"
+    
     fig.update_layout(
-        title="Карта скважин (вид сверху)",
-        xaxis_title="Координата X",
-        yaxis_title="Координата Y",
+        title=title_text,
+        xaxis_title="Координата X (м)",
+        yaxis_title="Координата Y (м)",
         hovermode="closest",
         template="plotly_white",
         height=600
@@ -738,3 +848,177 @@ def create_2d_well_projection(well_data: pd.DataFrame, las_data: Dict[str, Dict]
     )
     
     return fig
+
+
+def create_2d_trajectory_projections(well_name: str, trajectories: Dict[str, np.ndarray],
+                                      las_data: Dict[str, Dict] = None) -> Dict[str, go.Figure]:
+    """
+    Создает три 2D проекции траектории скважины (XY, XZ, YZ) с окраской по типу коллектора
+    
+    Аргументы:
+        well_name: название скважины
+        trajectories: словарь с траекториями скважин
+        las_data: словарь с LAS-данными (для окраски коллекторов)
+    
+    Возвращает:
+        Словарь с тремя Figure: {'XY': fig_xy, 'XZ': fig_xz, 'YZ': fig_yz}
+    """
+    if well_name not in trajectories:
+        return {}
+    
+    trajectory = trajectories[well_name]
+    traj_x = trajectory[:, 0]
+    traj_y = trajectory[:, 1]
+    traj_z = trajectory[:, 2]
+    traj_md = trajectory[:, 3]
+    
+    # Подготавливаем данные о коллекторах, если есть
+    has_collector_data = False
+    x_coords, y_coords, z_coords, curve_valid = None, None, None, None
+    
+    if las_data and well_name in las_data:
+        las = las_data[well_name]
+        depth = las['depth']
+        curve = las['curve']
+        null_value = las.get('null_value', -999.25)
+        
+        valid_mask = (curve != null_value) & (~np.isnan(curve))
+        if np.any(valid_mask):
+            depth_valid = depth[valid_mask]
+            curve_valid = curve[valid_mask]
+            
+            # Интерполируем координаты
+            x_coords = np.interp(depth_valid, traj_md, traj_x)
+            y_coords = np.interp(depth_valid, traj_md, traj_y)
+            z_coords = np.interp(depth_valid, traj_md, traj_z)
+            has_collector_data = True
+    
+    # Функция для создания сегментов с окраской
+    def add_colored_segments(fig, x_data, y_data, x_label, y_label):
+        """Добавляет базовую траекторию и цветные сегменты коллекторов"""
+        # Базовая траектория (бледно-синяя)
+        fig.add_trace(go.Scatter(
+            x=x_data,
+            y=y_data,
+            mode='lines',
+            line=dict(color='lightblue', width=2),
+            name='Траектория',
+            hovertemplate=f'{x_label}: %{{x:.1f}}<br>{y_label}: %{{y:.1f}}<extra></extra>'
+        ))
+        
+        # Маркеры начала и конца
+        fig.add_trace(go.Scatter(
+            x=[x_data[0], x_data[-1]],
+            y=[y_data[0], y_data[-1]],
+            mode='markers',
+            marker=dict(size=10, color=['blue', 'red'], symbol=['circle', 'diamond']),
+            name='Начало/Конец',
+            showlegend=True,
+            hoverinfo='skip'
+        ))
+        
+        # Добавляем цветные сегменты коллекторов, если есть данные
+        if has_collector_data:
+            # Определяем какие координаты использовать
+            if x_label == 'X' and y_label == 'Y':
+                seg_x, seg_y = x_coords, y_coords
+            elif x_label == 'X' and y_label == 'Z':
+                seg_x, seg_y = x_coords, z_coords
+            else:  # Y, Z
+                seg_x, seg_y = y_coords, z_coords
+            
+            i = 0
+            while i < len(curve_valid):
+                current_value = curve_valid[i]
+                start_idx = i
+                
+                while i < len(curve_valid) and curve_valid[i] == current_value:
+                    i += 1
+                end_idx = i - 1
+                
+                if current_value == 1:
+                    color, width, name = 'green', 4, 'Коллектор'
+                elif current_value == 0:
+                    color, width, name = 'gray', 3, 'Неколлектор'
+                else:
+                    continue
+                
+                fig.add_trace(go.Scatter(
+                    x=seg_x[start_idx:end_idx+1],
+                    y=seg_y[start_idx:end_idx+1],
+                    mode='lines',
+                    line=dict(color=color, width=width),
+                    showlegend=False,
+                    hovertemplate=f'{name}<br>{x_label}: %{{x:.1f}}<br>{y_label}: %{{y:.1f}}<extra></extra>'
+                ))
+    
+    # Создаем три проекции
+    figures = {}
+    
+    # 1. Проекция XY (вид сверху)
+    fig_xy = go.Figure()
+    add_colored_segments(fig_xy, traj_x, traj_y, 'X', 'Y')
+    fig_xy.update_layout(
+        title=f'Проекция XY (вид сверху) - {well_name}',
+        xaxis_title='X (м)',
+        yaxis_title='Y (м)',
+        height=500,
+        hovermode='closest',
+        template='plotly_white',
+        showlegend=True,
+        legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)')
+    )
+    fig_xy.update_xaxes(scaleanchor="y", scaleratio=1)
+    figures['XY'] = fig_xy
+    
+    # 2. Проекция XZ (вид сбоку)
+    fig_xz = go.Figure()
+    add_colored_segments(fig_xz, traj_x, traj_z, 'X', 'Z')
+    fig_xz.update_layout(
+        title=f'Проекция XZ (вид сбоку) - {well_name}',
+        xaxis_title='X (м)',
+        yaxis_title='Глубина Z (м)',
+        yaxis=dict(autorange='reversed'),  # Z увеличивается вниз
+        height=500,
+        hovermode='closest',
+        template='plotly_white',
+        showlegend=True,
+        legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)')
+    )
+    figures['XZ'] = fig_xz
+    
+    # 3. Проекция YZ (вид сбоку)
+    fig_yz = go.Figure()
+    add_colored_segments(fig_yz, traj_y, traj_z, 'Y', 'Z')
+    fig_yz.update_layout(
+        title=f'Проекция YZ (вид сбоку) - {well_name}',
+        xaxis_title='Y (м)',
+        yaxis_title='Глубина Z (м)',
+        yaxis=dict(autorange='reversed'),  # Z увеличивается вниз
+        height=500,
+        hovermode='closest',
+        template='plotly_white',
+        showlegend=True,
+        legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)')
+    )
+    figures['YZ'] = fig_yz
+    
+    # Добавляем легенду для коллекторов во все графики
+    if has_collector_data:
+        for fig in figures.values():
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None],
+                mode='lines',
+                line=dict(color='green', width=4),
+                name='Коллектор (1)',
+                showlegend=True
+            ))
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None],
+                mode='lines',
+                line=dict(color='gray', width=3),
+                name='Неколлектор (0)',
+                showlegend=True
+            ))
+    
+    return figures

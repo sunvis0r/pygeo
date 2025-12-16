@@ -10,7 +10,8 @@ import streamlit as st
 from frontend.modules.data_loader import load_all_las_files, combine_all_data, load_welltrajectories
 from frontend.modules.preprocess import create_grid_from_points, filter_by_depth
 from frontend.modules.visualizer import create_2d_map, create_prediction_heatmap, create_3d_trajectories, \
-    create_las_cross_section, create_well_comparison, create_3d_reservoir_layers, create_2d_well_projection
+    create_las_cross_section, create_well_comparison, create_3d_reservoir_layers, create_2d_well_projection, \
+    create_2d_trajectory_projections
 
 # Настройки страницы
 st.set_page_config(
@@ -41,7 +42,7 @@ with st.sidebar:
     # Переключение режимов
     view_mode = st.radio(
         "Режим просмотра:",
-        ["Карта", "3D траектории", "3D пласты коллекторов", "2D проекция скважины", "Разрезы", "Анализ"],
+        ["Карта", "3D траектории", "3D пласты коллекторов", "2D проекция скважины", "2D проекции XY/XZ/YZ", "Разрезы", "Анализ"],
         index=0
     )
 
@@ -134,9 +135,14 @@ else:
         col1, col2 = st.columns([3, 1])
 
         with col1:
-            # 2D карта
-            fig_map = create_2d_map(st.session_state.well_data)
-            st.plotly_chart(fig_map, width='stretch')
+            # 2D карта с траекториями
+            fig_map = create_2d_map(
+                st.session_state.well_data,
+                st.session_state.trajectories,
+                show_well_names=True,
+                show_trajectories=True
+            )
+            st.plotly_chart(fig_map, use_container_width=True)
 
         with col2:
             st.metric(
@@ -335,6 +341,94 @@ else:
                     st.session_state.trajectories
                 )
                 st.plotly_chart(fig_2d_proj, use_container_width=True)
+            else:
+                st.warning("Выберите скважину для отображения")
+    
+    # Режим 2D ПРОЕКЦИИ XY/XZ/YZ
+    elif view_mode == "2D проекции XY/XZ/YZ":
+        st.header("📐 2D проекции траектории скважины")
+        
+        st.info("💡 Три проекции траектории: XY (вид сверху), XZ и YZ (виды сбоку) с окраской коллекторов")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col2:
+            st.markdown("#### Выбор скважины")
+            
+            # Список скважин
+            well_list = sorted(list(st.session_state.trajectories.keys()))
+            selected_well = st.selectbox(
+                "Скважина:",
+                well_list,
+                index=0,
+                key="projections_well_select"
+            )
+            
+            # Информация о выбранной скважине
+            if selected_well and selected_well in st.session_state.well_data["Well"].values:
+                well_info = st.session_state.well_data[
+                    st.session_state.well_data["Well"] == selected_well
+                ].iloc[0]
+                
+                st.markdown("#### Информация")
+                st.metric("Координата X", f"{well_info['X']:.2f} м")
+                st.metric("Координата Y", f"{well_info['Y']:.2f} м")
+                st.metric("Кровля Z", f"{well_info['Z']:.2f} м")
+                st.metric("Мощность H", f"{well_info['H']:.2f} м")
+                st.metric("Эфф. мощность", f"{well_info['EFF_H']:.2f} м")
+                st.metric("Доля коллектора", f"{well_info['Доля_коллектора']*100:.1f}%")
+            
+            # Информация о траектории
+            if selected_well in st.session_state.trajectories:
+                traj = st.session_state.trajectories[selected_well]
+                st.markdown("#### Траектория")
+                st.metric("Длина MD", f"{traj[-1, 3]:.1f} м")
+                st.metric("Глубина Z", f"{traj[-1, 2]:.1f} м")
+                st.metric("Точек", len(traj))
+            
+            st.markdown("#### Легенда")
+            st.markdown("""
+            **Цвета:**
+            - 🔵 **Бледно-синий** - траектория скважины
+            - 🟢 **Зеленый** - коллектор (1)
+            - ⚪ **Серый** - неколлектор (0)
+            
+            **Маркеры:**
+            - 🔵 **Синий круг** - начало
+            - 🔴 **Красный ромб** - конец
+            
+            **Проекции:**
+            - **XY** - вид сверху (горизонтальная плоскость)
+            - **XZ** - вид сбоку (вертикальная плоскость)
+            - **YZ** - вид сбоку (вертикальная плоскость)
+            """)
+        
+        with col1:
+            if selected_well:
+                # Создаем три проекции
+                projections = create_2d_trajectory_projections(
+                    selected_well,
+                    st.session_state.trajectories,
+                    st.session_state.las_data
+                )
+                
+                if projections:
+                    # Отображаем проекции в табах
+                    tab1, tab2, tab3 = st.tabs(["📍 Проекция XY", "📏 Проекция XZ", "📐 Проекция YZ"])
+                    
+                    with tab1:
+                        st.plotly_chart(projections['XY'], use_container_width=True)
+                        st.caption("Вид сверху: показывает горизонтальное отклонение скважины")
+                    
+                    with tab2:
+                        st.plotly_chart(projections['XZ'], use_container_width=True)
+                        st.caption("Вид сбоку (X-Z): показывает отклонение по оси X и глубину")
+                    
+                    with tab3:
+                        st.plotly_chart(projections['YZ'], use_container_width=True)
+                        st.caption("Вид сбоку (Y-Z): показывает отклонение по оси Y и глубину")
+                else:
+                    st.warning(f"Не удалось создать проекции для {selected_well}")
             else:
                 st.warning("Выберите скважину для отображения")
     
