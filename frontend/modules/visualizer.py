@@ -188,7 +188,11 @@ def create_3d_trajectories(trajectories: Dict[str, np.ndarray]) -> go.Figure:
         if len(trajectory) < 2:
             continue
 
-        color = colors[i % len(colors)]
+        # ML скважины отображаются розовым цветом
+        if well_name.startswith("ML_"):
+            color = 'hotpink'
+        else:
+            color = colors[i % len(colors)]
 
         fig.add_trace(go.Scatter3d(
             x=trajectory[:, 0],
@@ -205,6 +209,12 @@ def create_3d_trajectories(trajectories: Dict[str, np.ndarray]) -> go.Figure:
         ))
 
         # Добавляем маркеры для начала и конца
+        # ML скважины: розовый (начало) и фиолетовый (конец)
+        if well_name.startswith("ML_"):
+            marker_colors = ['hotpink', 'purple']
+        else:
+            marker_colors = [color, color]
+        
         fig.add_trace(go.Scatter3d(
             x=[trajectory[0, 0], trajectory[-1, 0]],
             y=[trajectory[0, 1], trajectory[-1, 1]],
@@ -212,7 +222,7 @@ def create_3d_trajectories(trajectories: Dict[str, np.ndarray]) -> go.Figure:
             mode="markers",
             marker=dict(
                 size=5,
-                color=color
+                color=marker_colors
             ),
             showlegend=False,
             hoverinfo="skip"
@@ -425,7 +435,7 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dic
     wells_processed = 0
     wells_with_layers = 0
     
-    # ПЕРВЫЙ ПРОХОД: Рисуем ВСЕ базовые траектории (бледно-синие)
+    # ПЕРВЫЙ ПРОХОД: Рисуем ВСЕ базовые траектории (бледно-синие или розовые для ML)
     for well_name, trajectory in trajectories.items():
         if len(trajectory) < 2:
             continue
@@ -436,7 +446,13 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dic
         traj_z = trajectory[:, 2]
         traj_md = trajectory[:, 3]
         
-        # Рисуем базовую траекторию (бледно-синяя, тонкая линия)
+        # ML скважины отображаются розовым цветом
+        if well_name.startswith("ML_"):
+            base_color = 'hotpink'
+        else:
+            base_color = 'lightblue'
+        
+        # Рисуем базовую траекторию
         fig.add_trace(go.Scatter3d(
             x=traj_x,
             y=traj_y,
@@ -445,7 +461,7 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dic
             name=well_name,
             line=dict(
                 width=3,
-                color='lightblue'
+                color=base_color
             ),
             hoverinfo="name+z",
             hovertemplate=f"{well_name}<br>Z: %{{z:.1f}}<br>MD: %{{customdata:.1f}}<extra></extra>",
@@ -453,7 +469,15 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dic
             showlegend=True
         ))
         
-        # Маркеры начала (синий круг) и конца (красный ромб)
+        # Маркеры начала и конца
+        # ML скважины: розовый круг (начало) и фиолетовый ромб (конец)
+        if well_name.startswith("ML_"):
+            marker_colors = ['hotpink', 'purple']
+            marker_symbols = ['circle', 'diamond']
+        else:
+            marker_colors = ['blue', 'red']
+            marker_symbols = ['circle', 'diamond']
+        
         fig.add_trace(go.Scatter3d(
             x=[traj_x[0], traj_x[-1]],
             y=[traj_y[0], traj_y[-1]],
@@ -461,8 +485,8 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dic
             mode="markers",
             marker=dict(
                 size=6,
-                color=['blue', 'red'],
-                symbol=['circle', 'diamond']
+                color=marker_colors,
+                symbol=marker_symbols
             ),
             showlegend=False,
             hoverinfo="skip"
@@ -568,12 +592,20 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dic
             showlegend=True
         ))
     
-    # Добавляем легенду для базовой траектории
+    # Добавляем легенду для базовых траекторий
     fig.add_trace(go.Scatter3d(
         x=[None], y=[None], z=[None],
         mode='lines',
         line=dict(color='lightblue', width=3),
         name='Траектория скважины',
+        showlegend=True
+    ))
+    
+    fig.add_trace(go.Scatter3d(
+        x=[None], y=[None], z=[None],
+        mode='lines',
+        line=dict(color='hotpink', width=3),
+        name='ML скважина',
         showlegend=True
     ))
     

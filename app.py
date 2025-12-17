@@ -840,8 +840,8 @@ else:
             with st.form("add_well_form"):
                 well_name = st.text_input(
                     "Название скважины",
-                    value="WELL_NEW",
-                    help="Например: WELL_100, WELL_TEST"
+                    value="ML_WELL_NEW",
+                    help="Например: ML_WELL_100, ML_WELL_TEST (префикс ML_ для скважин с ML предсказаниями)"
                 )
                 
                 col_x, col_y = st.columns(2)
@@ -961,6 +961,12 @@ else:
                                         if use_ml:
                                             try:
                                                 st.info("🤖 Генерация ML предсказаний...")
+
+                                                # ВАЖНО: Добавляем префикс ML_ если его нет
+                                                if not well_name.startswith("ML_"):
+                                                    well_name = f"ML_{well_name}"
+                                                    # Обновляем траекторию с новым именем
+                                                    st.session_state.trajectories[well_name] = st.session_state.trajectories.pop(list(st.session_state.trajectories.keys())[-1])
 
                                                 # ВАЖНО: Используем MD (measured depth), а не Z координаты
                                                 # MD всегда положительный (от 0 до длины скважины)
