@@ -4,6 +4,7 @@
 import os
 
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
@@ -11,7 +12,11 @@ from frontend.modules.data_loader import load_all_las_files, combine_all_data, l
 from frontend.modules.preprocess import create_grid_from_points, filter_by_depth
 from frontend.modules.visualizer import create_2d_map, create_prediction_heatmap, create_3d_trajectories, \
     create_las_cross_section, create_well_comparison, create_3d_reservoir_layers, create_2d_well_projection, \
-    create_2d_trajectory_projections
+    create_2d_trajectory_projections, create_ml_predictions_map, create_ml_prediction_details, \
+    create_ml_comparison_chart
+
+# Импорт ML предиктора
+from frontend.modules.ml_predictor import ml_predictor
 
 # Импорт DatabaseManager
 try:
@@ -121,7 +126,7 @@ with st.sidebar:
     # Переключение режимов
     view_mode = st.radio(
         "Режим просмотра:",
-        ["Карта", "3D траектории", "3D пласты коллекторов", "2D проекция скважины", "2D проекции XY/XZ/YZ", "Разрезы", "Анализ", "➕ Добавить скважину"],
+        ["Карта", "3D траектории", "3D пласты коллекторов", "2D проекция скважины", "2D проекции XY/XZ/YZ", "Разрезы", "Анализ", "🤖 ML предсказания", "➕ Добавить скважину"],
         index=0
     )
 
@@ -665,12 +670,166 @@ else:
                         file_name="well_data.xlsx",
                         mime="application/vnd.ms-excel"
                     )
-    
+
+    # Режим ML ПРЕДСКАЗАНИЙ
+    elif view_mode == "🤖 ML предсказания":
+        st.header("🤖 Демонстрация ML предсказаний")
+
+        st.info("💡 Этот режим демонстрирует работу ML модели. Для реального использования добавьте скважину через режим '➕ Добавить скважину' с включенными ML предсказаниями")
+
+        # Настройки предсказаний
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            st.markdown("### Настройки предсказаний")
+
+            num_predictions = st.slider(
+                "Количество предсказываемых скважин",
+                min_value=1,
+                max_value=10,
+                value=3,
+                help="Сколько новых скважин сгенерировать для демонстрации"
+            )
+
+            depth_min = st.number_input(
+                "Минимальная глубина (м)",
+                value=-200.0,
+                step=10.0,
+                format="%.1f"
+            )
+
+            depth_max = st.number_input(
+                "Максимальная глубина (м)",
+                value=0.0,
+                step=10.0,
+                format="%.1f"
+            )
+
+            num_points = st.slider(
+                "Точек предсказания на скважину",
+                min_value=20,
+                max_value=100,
+                value=50
+            )
+
+        with col2:
+            st.markdown("### Статистика модели")
+            if st.button("🔄 Запустить предсказания", type="primary"):
+                st.session_state.ml_predictions = None  # Сброс предыдущих
+
+                # Генерируем тестовые скважины для предсказания
+                test_wells = []
+                existing_coords = []
+
+                # Собираем координаты существующих скважин
+                if not st.session_state.well_data.empty:
+                    for _, row in st.session_state.well_data.iterrows():
+                        if pd.notna(row.get('X')) and pd.notna(row.get('Y')):
+                            existing_coords.append((row['X'], row['Y']))
+
+                # Генерируем новые координаты рядом с существующими
+                for i in range(num_predictions):
+                    if existing_coords:
+                        # Выбираем случайную существующую скважину как центр
+                        center_x, center_y = existing_coords[np.random.randint(len(existing_coords))]
+
+                        # Добавляем случайное смещение
+                        offset_x = np.random.normal(0, 500)  # ±500м
+                        offset_y = np.random.normal(0, 500)
+
+                        new_x = center_x + offset_x
+                        new_y = center_y + offset_y
+                    else:
+                        # Если нет существующих, генерируем случайные
+                        new_x = np.random.uniform(6000, 15000)
+                        new_y = np.random.uniform(70000, 78000)
+
+                    test_wells.append({
+                        'name': f'WELL_ML_{i+1:02d}',
+                        'x': new_x,
+                        'y': new_y
+                    })
+
+                # Запускаем предсказания
+                with st.spinner("🤖 ML модель делает предсказания..."):
+                    predictions = ml_predictor.predict_multiple_wells(
+                        wells_data=test_wells,
+                        depth_range=(depth_min, depth_max),
+                        num_points=num_points
+                    )
+
+                st.session_state.ml_predictions = predictions
+                st.success(f"✅ Сгенерировано {len(predictions)} предсказаний!")
+
+        # Отображение результатов
+        if hasattr(st.session_state, 'ml_predictions') and st.session_state.ml_predictions:
+
+            predictions = st.session_state.ml_predictions
+
+            # Статистика предсказаний
+            stats = ml_predictor.get_prediction_stats(predictions)
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Предсказанных скважин", stats.get('num_wells', 0))
+            with col2:
+                st.metric("Средняя доля коллектора", f"{stats.get('collector_ratio_mean', 0):.3f}")
+            with col3:
+                st.metric("Всего точек", stats.get('total_points', 0))
+            with col4:
+                st.metric("Стандартное отклонение", f"{stats.get('collector_ratio_std', 0):.3f}")
+
+            # Вкладки с визуализациями
+            tab1, tab2, tab3 = st.tabs(["🗺️ Карта", "📊 Детали", "📈 Сравнение"])
+
+            with tab1:
+                st.markdown("### Карта с предсказаниями")
+                fig_map = create_ml_predictions_map(
+                    existing_wells=st.session_state.well_data,
+                    predicted_wells=predictions,
+                    show_existing=True
+                )
+                st.plotly_chart(fig_map, use_container_width=True)
+
+            with tab2:
+                st.markdown("### Детальные предсказания")
+
+                # Выбор скважины для детального просмотра
+                well_names = list(predictions.keys())
+                selected_well = st.selectbox(
+                    "Выберите скважину для детального анализа:",
+                    well_names,
+                    key="ml_detail_well"
+                )
+
+                if selected_well and selected_well in predictions:
+                    fig_detail = create_ml_prediction_details(predictions[selected_well])
+                    st.plotly_chart(fig_detail, use_container_width=True)
+
+                    # Показываем числовые данные
+                    pred_data = predictions[selected_well]
+                    collector_ratio = np.mean(pred_data['prediction'] > 0.5)
+
+                    st.markdown(f"**Предсказанная доля коллектора: {collector_ratio:.3f}**")
+                    st.markdown(f"**Координаты: X={pred_data['x']:.1f}, Y={pred_data['y']:.1f}**")
+
+            with tab3:
+                st.markdown("### Сравнение с реальными данными")
+                fig_comparison = create_ml_comparison_chart(
+                    existing_wells=st.session_state.well_data,
+                    predicted_wells=predictions
+                )
+                st.plotly_chart(fig_comparison, use_container_width=True)
+
+                st.info("🔍 Синие столбцы - реальные данные существующих скважин, Красные - ML предсказания для новых скважин")
+        else:
+            st.info("👆 Нажмите 'Запустить предсказания' для демонстрации работы ML модели")
+
     # Режим ДОБАВИТЬ СКВАЖИНУ
     elif view_mode == "➕ Добавить скважину":
-        st.header("➕ Добавить новую скважину")
-        
-        st.info("💡 Создайте вертикальную скважину, указав координаты начала и конца")
+        st.header("➕ Добавить новую скважину с ML предсказаниями")
+
+        st.info("💡 Создайте вертикальную скважину и автоматически получите ML предсказания коллекторских зон по всей глубине")
         
         col1, col2 = st.columns([2, 1])
         
@@ -718,7 +877,37 @@ else:
                         format="%.2f",
                         help="Глубина конца скважины (отрицательное значение)"
                     )
-                
+
+                # Опция ML предсказаний
+                use_ml = st.checkbox(
+                    "🤖 Сгенерировать ML предсказания коллекторских зон",
+                    value=True,
+                    help="Автоматически предсказать коллекторские свойства по глубине скважины"
+                )
+
+                # Параметры ML (показываются только если чекбокс выбран)
+                if use_ml:
+                    st.markdown("**Параметры ML предсказаний:**")
+                    ml_col1, ml_col2 = st.columns(2)
+                    with ml_col1:
+                        ml_depth_step = st.slider(
+                            "Шаг глубины (м)",
+                            min_value=1.0,
+                            max_value=10.0,
+                            value=5.0,
+                            step=1.0,
+                            help="Расстояние между точками предсказания"
+                        )
+                    with ml_col2:
+                        ml_confidence = st.slider(
+                            "Уровень доверия",
+                            min_value=0.1,
+                            max_value=1.0,
+                            value=0.7,
+                            step=0.1,
+                            help="Минимальная вероятность для определения коллектора"
+                        )
+
                 # Кнопка добавления
                 submitted = st.form_submit_button("➕ Добавить скважину", type="primary")
                 
@@ -768,7 +957,68 @@ else:
                                     )
                                     
                                     if success:
+                                        # Если включены ML предсказания, генерируем и сохраняем их
+                                        if use_ml:
+                                            try:
+                                                st.info("🤖 Генерация ML предсказаний...")
+
+                                                # ВАЖНО: Используем MD (measured depth), а не Z координаты
+                                                # MD всегда положительный (от 0 до длины скважины)
+                                                depth_range_meters = abs(z2_coord - z1_coord)
+                                                num_predictions = max(int(depth_range_meters / ml_depth_step) + 1, 10)
+
+                                                # Генерируем предсказания с MD диапазоном (0 до длины скважины)
+                                                predictions = ml_predictor.predict_collector_zones(
+                                                    well_name=well_name,
+                                                    x=x_coord,
+                                                    y=y_coord,
+                                                    depth_range=(0, depth_range_meters),  # MD от 0 до длины
+                                                    num_points=num_predictions
+                                                )
+
+                                                # ВАЖНО: Убеждаемся что предсказания строго 0 или 1
+                                                # Преобразуем в бинарные значения (на случай если есть float)
+                                                binary_predictions = np.where(predictions['prediction'] >= 0.5, 1, 0).astype(int)
+
+                                                # ВАЖНО: Убеждаемся что depth (MD) положительный
+                                                depth_md = np.abs(predictions['depth'])  # MD всегда положительный
+                                                
+                                                # Отладка: проверяем что сохраняем
+                                                print(f"🔍 DEBUG: Сохранение LAS данных для {well_name}")
+                                                print(f"  depth_md диапазон: {depth_md.min():.2f} - {depth_md.max():.2f}")
+                                                print(f"  binary_predictions: {np.unique(binary_predictions)}")
+                                                
+                                                # Сохраняем предсказания как LAS данные
+                                                las_success = st.session_state.db_manager.save_las_data(
+                                                    well_name=well_name,
+                                                    depth=depth_md,
+                                                    curve=binary_predictions
+                                                )
+
+                                                if las_success:
+                                                    # Обновляем session state с новыми LAS данными
+                                                    st.session_state.las_data[well_name] = {
+                                                        'well_name': well_name,
+                                                        'depth': depth_md,  # Используем положительный MD
+                                                        'curve': binary_predictions,
+                                                        'null_value': -999.25
+                                                    }
+                                                    
+                                                    # Проверяем что данные добавлены
+                                                    collector_count = np.sum(binary_predictions == 1)
+                                                    non_collector_count = np.sum(binary_predictions == 0)
+                                                    
+                                                    st.success("✅ ML предсказания сгенерированы и сохранены!")
+                                                    st.info(f"💡 Добавлено {len(binary_predictions)} точек: {collector_count} коллектор, {non_collector_count} неколлектор")
+                                                    st.info("📊 Данные доступны для визуализации в режимах '3D пласты коллекторов', '2D проекция скважины' и 'Разрезы'")
+                                                else:
+                                                    st.warning("⚠️ Скважина добавлена, но ML предсказания не сохранены")
+
+                                            except Exception as e:
+                                                st.warning(f"⚠️ Ошибка генерации ML предсказаний: {e}")
+
                                         st.success(f"✅ Скважина {well_name} добавлена и сохранена в БД!")
+                                        st.info("💡 Перейдите в режим '3D пласты коллекторов' для просмотра")
                                     else:
                                         st.warning(f"⚠️ Скважина {well_name} добавлена, но траектория не сохранена в БД")
                                 else:
@@ -777,9 +1027,10 @@ else:
                                 st.warning(f"⚠️ Скважина {well_name} добавлена, но ошибка сохранения в БД: {e}")
                         else:
                             st.success(f"✅ Скважина {well_name} успешно добавлена!")
+                            st.info("💡 Перейдите в режим '3D пласты коллекторов' для просмотра")
                         
                         st.balloons()
-                        
+
                         # Показываем информацию
                         st.markdown("#### Информация о добавленной скважине:")
                         info_col1, info_col2, info_col3 = st.columns(3)
@@ -789,6 +1040,26 @@ else:
                             st.metric("Глубина", f"{depth_range:.1f} м")
                         with info_col3:
                             st.metric("Точек", num_points)
+
+                        # Если были сгенерированы ML предсказания, показываем их
+                        if use_ml and 'predictions' in locals():
+                            st.markdown("#### 🤖 ML Предсказания:")
+                            pred_collector_ratio = np.mean(predictions['prediction'] > ml_confidence)
+
+                            ml_col1, ml_col2, ml_col3 = st.columns(3)
+                            with ml_col1:
+                                st.metric("Доля коллектора", f"{pred_collector_ratio:.1%}")
+                            with ml_col2:
+                                st.metric("Точек анализа", len(predictions['prediction']))
+                            with ml_col3:
+                                st.metric("Шаг глубины", f"{ml_depth_step:.1f} м")
+
+                            # Показываем график предсказаний
+                            fig_pred = create_ml_prediction_details(predictions)
+                            st.plotly_chart(fig_pred, use_container_width=True)
+
+                            st.info(f"💡 ML модель предсказала **{pred_collector_ratio:.1%}** коллекторских зон в скважине {well_name}")
+
         
         with col2:
             st.markdown("### Справка")

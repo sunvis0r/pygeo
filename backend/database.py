@@ -253,7 +253,18 @@ class DatabaseManager:
     # ========== LAS DATA ==========
     
     def save_las_data(self, well_name: str, depth: np.ndarray, curve: np.ndarray):
-        """Сохранить LAS данные"""
+        """
+        Сохранить LAS данные (включая ML предсказания)
+        
+        Args:
+            well_name: Название скважины
+            depth: Массив глубин (MD)
+            curve: Массив значений кривой (0=неколлектор, 1=коллектор)
+        
+        Note:
+            Значения curve должны быть 0 или 1 (бинарная классификация).
+            ML предсказания также сохраняются через этот метод.
+        """
         conn = self.get_connection()
         if not conn:
             return False
@@ -270,11 +281,16 @@ class DatabaseManager:
                 cur.execute("DELETE FROM las_data WHERE well_id = %s", (well_id,))
                 
                 # Вставляем новые данные
-                data = [
-                    (well_id, float(d), float(c))
-                    for d, c in zip(depth, curve)
-                    if c != -999.25 and not np.isnan(c)
-                ]
+                # ВАЖНО: curve_value ДОЛЖНО быть строго 0 или 1 (INTEGER)
+                # Преобразуем к бинарным значениям если нужно
+                data = []
+                for d, c in zip(depth, curve):
+                    if c == -999.25 or np.isnan(c):
+                        continue
+                    
+                    # Преобразуем к бинарному значению (0 или 1)
+                    binary_value = 1 if float(c) >= 0.5 else 0
+                    data.append((well_id, float(d), binary_value))
                 
                 execute_batch(cur, """
                     INSERT INTO las_data (well_id, depth, curve_value)
@@ -291,7 +307,13 @@ class DatabaseManager:
             self.put_connection(conn)
     
     def get_all_las_data(self) -> Dict[str, Dict]:
-        """Получить все LAS данные"""
+        """
+        Получить все LAS данные (включая ML предсказания)
+        
+        Returns:
+            Словарь {well_name: {'depth': array, 'curve': array, ...}}
+            где curve содержит значения 0 или 1 (коллектор/неколлектор)
+        """
         conn = self.get_connection()
         if not conn:
             return {}

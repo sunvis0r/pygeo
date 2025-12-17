@@ -8,6 +8,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+from .ml_predictor import ml_predictor
+
 
 def create_2d_map(df: pd.DataFrame, trajectories: Dict[str, np.ndarray] = None,
                   show_well_names: bool = True, show_trajectories: bool = True) -> go.Figure:
@@ -393,7 +395,7 @@ def create_well_comparison(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, np.ndarray] = None,
+def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dict[str, np.ndarray] = None,
                                 las_data: Dict[str, Dict] = None, show_trajectories: bool = True,
                                 show_vertical_layers: bool = True, show_well_logs: bool = True) -> go.Figure:
     """
@@ -404,7 +406,7 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame, trajectories: Dict[str, 
     2. Верхний слой: слои коллекторов (зеленый/серый) поверх траекторий
     
     Аргументы:
-        well_data: DataFrame с данными скважин (X, Y, Z, H, EFF_H)
+        well_data: DataFrame с данными скважин (НЕ ИСПОЛЬЗУЕТСЯ, оставлено для совместимости)
         trajectories: словарь с траекториями скважин (обязательно)
         las_data: словарь с LAS-данными (для отображения слоев коллекторов)
         show_trajectories: не используется (оставлено для совместимости)
@@ -1020,3 +1022,286 @@ def create_2d_trajectory_projections(well_name: str, trajectories: Dict[str, np.
             ))
     
     return figures
+
+
+def create_ml_predictions_map(existing_wells: pd.DataFrame,
+                            predicted_wells: Dict[str, Dict],
+                            show_existing: bool = True) -> go.Figure:
+    """
+    Создает карту с существующими скважинами и ML предсказаниями
+
+    Args:
+        existing_wells: DataFrame с существующими скважинами
+        predicted_wells: Словарь предсказаний от ML модели
+        show_existing: Показывать ли существующие скважины
+
+    Returns:
+        Plotly Figure с картой
+    """
+
+    fig = go.Figure()
+
+    # 1. Добавляем существующие скважины
+    if show_existing and not existing_wells.empty:
+        # Фильтруем скважины с координатами
+        wells_with_coords = existing_wells.dropna(subset=['X', 'Y'])
+
+        if not wells_with_coords.empty:
+            # Создаем цветовую шкалу по доле коллектора
+            collector_ratios = wells_with_coords['Доля_коллектора'].fillna(0)
+
+            fig.add_trace(go.Scatter(
+                x=wells_with_coords['X'],
+                y=wells_with_coords['Y'],
+                mode='markers',
+                marker=dict(
+                    size=10,
+                    color=collector_ratios,
+                    colorscale='Viridis',
+                    colorbar=dict(
+                        title="Доля коллектора"
+                    ),
+                    showscale=True,
+                    symbol='circle',
+                    line=dict(width=1, color='black')
+                ),
+                name='Существующие скважины',
+                text=wells_with_coords['Well'],
+                hovertemplate=
+                '<b>%{text}</b><br>' +
+                'X: %{x:.1f}<br>' +
+                'Y: %{y:.1f}<br>' +
+                'Доля коллектора: %{marker.color:.3f}<br>' +
+                '<extra></extra>'
+            ))
+
+    # 2. Добавляем предсказанные скважины
+    if predicted_wells:
+        pred_x = []
+        pred_y = []
+        pred_names = []
+        pred_ratios = []
+
+        for well_name, pred_data in predicted_wells.items():
+            pred_x.append(pred_data['x'])
+            pred_y.append(pred_data['y'])
+            pred_names.append(well_name)
+
+            # Вычисляем предсказанную долю коллектора
+            predictions = np.array(pred_data['prediction'])
+            collector_ratio = np.mean(predictions > 0.5)  # Порог 0.5
+            pred_ratios.append(collector_ratio)
+
+        if pred_x:
+            fig.add_trace(go.Scatter(
+                x=pred_x,
+                y=pred_y,
+                mode='markers',
+                marker=dict(
+                    size=12,
+                    color=pred_ratios,
+                    colorscale='RdBu',
+                    showscale=True,
+                    symbol='diamond',
+                    line=dict(width=2, color='red')
+                ),
+                name='ML предсказания',
+                text=pred_names,
+                hovertemplate=
+                '<b>%{text}</b> (ПРЕДСКАЗАНИЕ)<br>' +
+                'X: %{x:.1f}<br>' +
+                'Y: %{y:.1f}<br>' +
+                'Предсказанная доля: %{marker.color:.3f}<br>' +
+                '<extra></extra>'
+            ))
+
+    # 3. Настраиваем layout
+    fig.update_layout(
+        title="Карта скважин с ML предсказаниями",
+        xaxis=dict(
+            title="Координата X (м)",
+            scaleanchor="y",
+            scaleratio=1
+        ),
+        yaxis=dict(
+            title="Координата Y (м)",
+            scaleanchor="x",
+            scaleratio=1
+        ),
+        width=800,
+        height=600,
+        template='plotly_white'
+    )
+
+    return fig
+
+
+def create_ml_prediction_details(prediction_data: Dict) -> go.Figure:
+    """
+    Создает детальный график предсказаний для одной скважины
+
+    Args:
+        prediction_data: Данные предсказания от ML модели
+
+    Returns:
+        Plotly Figure с графиком предсказаний
+    """
+
+    fig = go.Figure()
+
+    depths = prediction_data['depth']
+    predictions = prediction_data['prediction']
+    well_name = prediction_data['well_name']
+
+    # Основная кривая предсказаний
+    fig.add_trace(go.Scatter(
+        x=predictions,
+        y=depths,
+        mode='lines',
+        line=dict(color='red', width=3),
+        name='ML предсказание',
+        hovertemplate=
+        'Значение: %{x:.3f}<br>' +
+        'Глубина: %{y:.1f} м<br>' +
+        '<extra></extra>'
+    ))
+
+    # Добавляем порог 0.5 для определения коллектора
+    fig.add_hline(
+        y=0.5,
+        line_dash="dash",
+        line_color="gray",
+        annotation_text="Порог коллектора",
+        annotation_position="bottom right"
+    )
+
+    # Раскрашиваем зоны коллектора/неколлектора
+    collector_mask = predictions > 0.5
+
+    # Зоны коллектора (зеленый)
+    if np.any(collector_mask):
+        fig.add_trace(go.Scatter(
+            x=predictions[collector_mask],
+            y=depths[collector_mask],
+            mode='markers',
+            marker=dict(
+                color='green',
+                size=6,
+                symbol='circle'
+            ),
+            name='Коллектор',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+
+    # Зоны неколлектора (серый)
+    if np.any(~collector_mask):
+        fig.add_trace(go.Scatter(
+            x=predictions[~collector_mask],
+            y=depths[~collector_mask],
+            mode='markers',
+            marker=dict(
+                color='gray',
+                size=4,
+                symbol='circle'
+            ),
+            name='Неколлектор',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+
+    # Настраиваем layout
+    fig.update_layout(
+        title=f"ML предсказания для скважины {well_name}",
+        xaxis=dict(
+            title="Вероятность коллектора",
+            range=[-0.1, 1.1]
+        ),
+        yaxis=dict(
+            title="Глубина (м)",
+            autorange="reversed"  # Глубина увеличивается вниз
+        ),
+        width=600,
+        height=800,
+        template='plotly_white',
+        showlegend=True,
+        legend=dict(
+            x=0.02,
+            y=0.98,
+            bgcolor='rgba(255,255,255,0.8)'
+        )
+    )
+
+    return fig
+
+
+def create_ml_comparison_chart(existing_wells: pd.DataFrame,
+                             predicted_wells: Dict[str, Dict]) -> go.Figure:
+    """
+    Создает сравнительную диаграмму существующих и предсказанных скважин
+
+    Args:
+        existing_wells: DataFrame с существующими скважинами
+        predicted_wells: Словарь предсказаний
+
+    Returns:
+        Plotly Figure со сравнением
+    """
+
+    fig = go.Figure()
+
+    # Собираем данные для сравнения
+    existing_ratios = []
+    existing_names = []
+
+    if not existing_wells.empty:
+        for _, row in existing_wells.iterrows():
+            if pd.notna(row.get('Доля_коллектора')):
+                existing_ratios.append(row['Доля_коллектора'])
+                existing_names.append(row['Well'])
+
+    predicted_ratios = []
+    predicted_names = []
+
+    for well_name, pred_data in predicted_wells.items():
+        predictions = pred_data['prediction']
+        ratio = np.mean(predictions > 0.5)
+        predicted_ratios.append(ratio)
+        predicted_names.append(f"{well_name} (ML)")
+
+    # Создаем сравнительную диаграмму
+    if existing_ratios:
+        fig.add_trace(go.Bar(
+            x=existing_names,
+            y=existing_ratios,
+            name='Реальные данные',
+            marker_color='blue',
+            opacity=0.7
+        ))
+
+    if predicted_ratios:
+        fig.add_trace(go.Bar(
+            x=predicted_names,
+            y=predicted_ratios,
+            name='ML предсказания',
+            marker_color='red',
+            opacity=0.7
+        ))
+
+    fig.update_layout(
+        title="Сравнение доли коллектора: Реальные vs ML предсказания",
+        xaxis=dict(
+            title="Скважины",
+            tickangle=45
+        ),
+        yaxis=dict(
+            title="Доля коллектора",
+            range=[0, 1]
+        ),
+        width=800,
+        height=500,
+        template='plotly_white',
+        barmode='group'
+    )
+
+    return fig

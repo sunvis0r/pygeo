@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS las_data (
     id SERIAL PRIMARY KEY,
     well_id INTEGER REFERENCES wells(id) ON DELETE CASCADE,
     depth FLOAT NOT NULL,
-    curve_value FLOAT NOT NULL,
+    curve_value INTEGER NOT NULL CHECK (curve_value IN (0, 1)),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
