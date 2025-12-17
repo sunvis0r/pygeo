@@ -407,21 +407,24 @@ def create_well_comparison(df: pd.DataFrame) -> go.Figure:
 
 def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dict[str, np.ndarray] = None,
                                 las_data: Dict[str, Dict] = None, show_trajectories: bool = True,
-                                show_vertical_layers: bool = True, show_well_logs: bool = True) -> go.Figure:
+                                show_vertical_layers: bool = True, show_well_logs: bool = True,
+                                show_interpolated_surfaces: bool = False) -> go.Figure:
     """
     Создает 3D визуализацию траекторий скважин с наложением слоев коллекторов
     
     Двухслойная визуализация:
     1. Базовый слой: все траектории скважин (бледно-синие линии)
     2. Верхний слой: слои коллекторов (зеленый/серый) поверх траекторий
+    3. Опционально: интерполированные поверхности между скважинами
     
     Аргументы:
-        well_data: DataFrame с данными скважин (НЕ ИСПОЛЬЗУЕТСЯ, оставлено для совместимости)
+        well_data: DataFrame с данными скважин
         trajectories: словарь с траекториями скважин (обязательно)
         las_data: словарь с LAS-данными (для отображения слоев коллекторов)
         show_trajectories: не используется (оставлено для совместимости)
         show_vertical_layers: не используется (оставлено для совместимости)
         show_well_logs: показывать слои коллекторов поверх траекторий
+        show_interpolated_surfaces: показывать интерполированные поверхности
     
     Возвращает:
         3D Figure с двухслойной визуализацией
@@ -573,6 +576,114 @@ def create_3d_reservoir_layers(well_data: pd.DataFrame = None, trajectories: Dic
                     hovertemplate=f"{well_name}<br>{name}<br>Z: %{{z:.1f}}<extra></extra>"
                 ))
                 layers_added += 1
+    
+    # НОВОЕ: Добавляем интерполированные поверхности между скважинами
+    if show_interpolated_surfaces and las_data and well_data is not None:
+        try:
+            from scipy.interpolate import griddata
+            
+            print("🔍 DEBUG: Начинаем создание интерполированных поверхностей...")
+            
+            # Собираем точки с данными о коллекторах
+            collector_points = []
+            non_collector_points = []
+            
+            for well_name, trajectory in trajectories.items():
+                if well_name not in las_data or len(trajectory) < 2:
+                    continue
+                
+                las = las_data[well_name]
+                depth = las['depth']
+                curve = las['curve']
+                null_value = las.get('null_value', -999.25)
+                
+                valid_mask = (curve != null_value) & (~np.isnan(curve))
+                if not np.any(valid_mask):
+                    continue
+                
+                depth_valid = depth[valid_mask]
+                curve_valid = curve[valid_mask]
+                
+                traj_x = trajectory[:, 0]
+                traj_y = trajectory[:, 1]
+                traj_z = trajectory[:, 2]
+                traj_md = trajectory[:, 3]
+                
+                # Интерполируем координаты
+                x_coords = np.interp(depth_valid, traj_md, traj_x)
+                y_coords = np.interp(depth_valid, traj_md, traj_y)
+                z_coords = np.interp(depth_valid, traj_md, traj_z)
+                
+                # Разделяем на коллекторы и неколлекторы
+                for i in range(len(curve_valid)):
+                    if curve_valid[i] == 1:
+                        collector_points.append([x_coords[i], y_coords[i], z_coords[i]])
+                    elif curve_valid[i] == 0:
+                        non_collector_points.append([x_coords[i], y_coords[i], z_coords[i]])
+            
+            print(f"🔍 DEBUG: Собрано {len(collector_points)} точек коллекторов, {len(non_collector_points)} неколлекторов")
+            
+            # Создаем горизонтальные слои
+            if len(collector_points) > 10:
+                all_z = [p[2] for p in collector_points]
+                
+                z_min, z_max = min(all_z), max(all_z)
+                num_layers = 5
+                z_levels = np.linspace(z_min, z_max, num_layers)
+                
+                print(f"🔍 DEBUG: Создаем {num_layers} слоев от Z={z_min:.1f} до Z={z_max:.1f}")
+                
+                # Для каждого уровня создаем поверхность
+                surfaces_added = 0
+                for z_level in z_levels:
+                    z_tolerance = (z_max - z_min) / (num_layers * 2)
+                    
+                    # Точки коллекторов около этого уровня
+                    coll_near = [p for p in collector_points if abs(p[2] - z_level) < z_tolerance]
+                    
+                    if len(coll_near) >= 4:
+                        coll_arr = np.array(coll_near)
+                        x_coll = coll_arr[:, 0]
+                        y_coll = coll_arr[:, 1]
+                        
+                        # Создаем сетку
+                        x_min, x_max = x_coll.min(), x_coll.max()
+                        y_min, y_max = y_coll.min(), y_coll.max()
+                        
+                        xi = np.linspace(x_min, x_max, 20)
+                        yi = np.linspace(y_min, y_max, 20)
+                        xi_2d, yi_2d = np.meshgrid(xi, yi)
+                        
+                        # Интерполируем
+                        zi_2d = griddata(
+                            (x_coll, y_coll),
+                            np.full(len(x_coll), z_level),
+                            (xi_2d, yi_2d),
+                            method='linear',
+                            fill_value=z_level
+                        )
+                        
+                        # Добавляем поверхность коллектора
+                        fig.add_trace(go.Surface(
+                            x=xi_2d,
+                            y=yi_2d,
+                            z=zi_2d,
+                            colorscale=[[0, 'yellow'], [1, 'yellow']],
+                            showscale=False,
+                            opacity=0.3,
+                            name=f'Коллектор Z≈{z_level:.1f}',
+                            hovertemplate='Коллектор<br>X: %{x:.1f}<br>Y: %{y:.1f}<br>Z: %{z:.1f}<extra></extra>'
+                        ))
+                        surfaces_added += 1
+                
+                print(f"✅ DEBUG: Добавлено {surfaces_added} интерполированных поверхностей")
+            else:
+                print(f"⚠️ DEBUG: Недостаточно точек коллекторов для интерполяции ({len(collector_points)} < 10)")
+                
+        except Exception as e:
+            print(f"❌ DEBUG: Ошибка создания интерполированных поверхностей: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Добавляем легенду для типов коллекторов
     if layers_added > 0:
@@ -1264,6 +1375,236 @@ def create_ml_prediction_details(prediction_data: Dict) -> go.Figure:
         )
     )
 
+    return fig
+
+
+def create_2d_section_with_kriging(well_data: pd.DataFrame, trajectories: Dict[str, np.ndarray],
+                                     las_data: Dict[str, Dict], selected_wells: list,
+                                     corridor_m: float = 250.0) -> go.Figure:
+    """
+    Создает 2D разрез через выбранные скважины с Kriging интерполяцией
+    
+    Аргументы:
+        well_data: DataFrame с данными скважин
+        trajectories: словарь с траекториями скважин
+        las_data: словарь с LAS-данными
+        selected_wells: список названий выбранных скважин (в порядке построения профиля)
+        corridor_m: ширина коридора для включения скважин (метры)
+    
+    Возвращает:
+        2D Figure с разрезом
+    """
+    from scipy.interpolate import griddata
+    
+    fig = go.Figure()
+    
+    if len(selected_wells) < 2:
+        fig.add_annotation(
+            text="Выберите минимум 2 скважины для построения разреза",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16)
+        )
+        fig.update_layout(
+            title="2D разрез (выберите скважины)",
+            height=650,
+            xaxis_title="Расстояние вдоль профиля (м)",
+            yaxis_title="Глубина Z (м)"
+        )
+        return fig
+    
+    # Строим ломаную через выбранные скважины
+    polyline_points = []
+    for well_name in selected_wells:
+        if well_name in well_data["Well"].values:
+            row = well_data[well_data["Well"] == well_name].iloc[0]
+            polyline_points.append({
+                'well': well_name,
+                'x': float(row['X']),
+                'y': float(row['Y']),
+                'z': float(row['Z'])
+            })
+    
+    if len(polyline_points) < 2:
+        fig.add_annotation(
+            text="Недостаточно данных для построения профиля",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    # Вычисляем расстояния вдоль профиля
+    distances = [0.0]
+    for i in range(1, len(polyline_points)):
+        dx = polyline_points[i]['x'] - polyline_points[i-1]['x']
+        dy = polyline_points[i]['y'] - polyline_points[i-1]['y']
+        dist = np.sqrt(dx**2 + dy**2)
+        distances.append(distances[-1] + dist)
+    
+    # Дискретизация профиля
+    profile_step = 25.0  # метры
+    total_length = distances[-1]
+    num_points = max(int(total_length / profile_step) + 1, 2)
+    s_profile = np.linspace(0, total_length, num_points)
+    
+    # Интерполируем X, Y вдоль профиля
+    x_profile = np.interp(s_profile, distances, [p['x'] for p in polyline_points])
+    y_profile = np.interp(s_profile, distances, [p['y'] for p in polyline_points])
+    
+    # Собираем данные для интерполяции
+    all_points = []
+    for well_name, trajectory in trajectories.items():
+        if well_name not in las_data or len(trajectory) < 2:
+            continue
+        
+        las = las_data[well_name]
+        depth = las['depth']
+        curve = las['curve']
+        null_value = las.get('null_value', -999.25)
+        
+        valid_mask = (curve != null_value) & (~np.isnan(curve))
+        if not np.any(valid_mask):
+            continue
+        
+        depth_valid = depth[valid_mask]
+        curve_valid = curve[valid_mask]
+        
+        traj_x = trajectory[:, 0]
+        traj_y = trajectory[:, 1]
+        traj_z = trajectory[:, 2]
+        traj_md = trajectory[:, 3]
+        
+        # Интерполируем координаты
+        x_coords = np.interp(depth_valid, traj_md, traj_x)
+        y_coords = np.interp(depth_valid, traj_md, traj_y)
+        z_coords = np.interp(depth_valid, traj_md, traj_z)
+        
+        for i in range(len(curve_valid)):
+            all_points.append({
+                'x': x_coords[i],
+                'y': y_coords[i],
+                'z': z_coords[i],
+                'value': float(curve_valid[i]),
+                'well': well_name
+            })
+    
+    if len(all_points) < 10:
+        fig.add_annotation(
+            text="Недостаточно данных для интерполяции",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    # Проецируем точки на профиль
+    points_df = pd.DataFrame(all_points)
+    s_proj = []
+    z_proj = []
+    values_proj = []
+    
+    for _, point in points_df.iterrows():
+        px, py, pz, val = point['x'], point['y'], point['z'], point['value']
+        
+        # Находим ближайшую точку на профиле
+        min_dist = float('inf')
+        best_s = 0
+        
+        for i in range(len(polyline_points) - 1):
+            x1, y1 = polyline_points[i]['x'], polyline_points[i]['y']
+            x2, y2 = polyline_points[i+1]['x'], polyline_points[i+1]['y']
+            
+            # Проекция на сегмент
+            dx, dy = x2 - x1, y2 - y1
+            L2 = dx*dx + dy*dy
+            if L2 < 1e-12:
+                continue
+            
+            t = max(0, min(1, ((px-x1)*dx + (py-y1)*dy) / L2))
+            qx = x1 + t*dx
+            qy = y1 + t*dy
+            
+            dist = np.sqrt((px-qx)**2 + (py-qy)**2)
+            if dist < min_dist:
+                min_dist = dist
+                best_s = distances[i] + t * (distances[i+1] - distances[i])
+        
+        if min_dist <= corridor_m:
+            s_proj.append(best_s)
+            z_proj.append(pz)
+            values_proj.append(val)
+    
+    if len(s_proj) < 10:
+        fig.add_annotation(
+            text=f"Недостаточно точек в коридоре {corridor_m}м",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    # Создаем сетку для интерполяции
+    z_min, z_max = min(z_proj), max(z_proj)
+    z_grid = np.linspace(z_min, z_max, 100)
+    s_grid = np.linspace(0, total_length, 100)
+    
+    S_grid, Z_grid = np.meshgrid(s_grid, z_grid)
+    
+    # Интерполируем значения
+    try:
+        values_grid = griddata(
+            (s_proj, z_proj),
+            values_proj,
+            (S_grid, Z_grid),
+            method='linear',
+            fill_value=np.nan
+        )
+        
+        # Добавляем heatmap
+        fig.add_trace(go.Heatmap(
+            x=s_grid,
+            y=z_grid,
+            z=values_grid,
+            colorscale=[[0, 'gray'], [0.5, 'yellow'], [1, 'green']],
+            zmin=0,
+            zmax=1,
+            colorbar=dict(title="Коллектор"),
+            hovertemplate='Расстояние: %{x:.1f}м<br>Глубина: %{y:.1f}м<br>Значение: %{z:.2f}<extra></extra>'
+        ))
+    except Exception as e:
+        print(f"Ошибка интерполяции: {e}")
+    
+    # Добавляем маркеры скважин на профиле
+    for i, point in enumerate(polyline_points):
+        fig.add_trace(go.Scatter(
+            x=[distances[i]],
+            y=[point['z']],
+            mode='markers+text',
+            marker=dict(size=10, color='blue', symbol='diamond'),
+            text=[point['well']],
+            textposition='top center',
+            name=point['well'],
+            showlegend=False,
+            hovertemplate=f"{point['well']}<br>Расстояние: {distances[i]:.1f}м<br>Z: {point['z']:.1f}м<extra></extra>"
+        ))
+    
+    # Линия профиля
+    fig.add_trace(go.Scatter(
+        x=[0, total_length],
+        y=[z_min, z_min],
+        mode='lines',
+        line=dict(color='black', width=2, dash='dash'),
+        showlegend=False,
+        hoverinfo='skip'
+    ))
+    
+    fig.update_layout(
+        title=f"2D разрез через {len(selected_wells)} скважин (длина {total_length:.0f}м, коридор {corridor_m:.0f}м)",
+        xaxis_title="Расстояние вдоль профиля (м)",
+        yaxis_title="Глубина Z (м)",
+        height=650,
+        hovermode='closest',
+        template='plotly_white'
+    )
+    
     return fig
 
 

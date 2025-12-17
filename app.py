@@ -13,7 +13,7 @@ from frontend.modules.preprocess import create_grid_from_points, filter_by_depth
 from frontend.modules.visualizer import create_2d_map, create_prediction_heatmap, create_3d_trajectories, \
     create_las_cross_section, create_well_comparison, create_3d_reservoir_layers, create_2d_well_projection, \
     create_2d_trajectory_projections, create_ml_predictions_map, create_ml_prediction_details, \
-    create_ml_comparison_chart
+    create_ml_comparison_chart, create_2d_section_with_kriging
 
 # Импорт ML предиктора
 from frontend.modules.ml_predictor import ml_predictor
@@ -53,6 +53,8 @@ if 'data_source' not in st.session_state:
     st.session_state.data_source = os.getenv('DATA_SOURCE', 'database')
 if 'auto_load_attempted' not in st.session_state:
     st.session_state.auto_load_attempted = False
+if 'selected_wells_for_section' not in st.session_state:
+    st.session_state.selected_wells_for_section = []
 
 # Инициализация DatabaseManager при старте
 if DB_AVAILABLE and st.session_state.db_manager is None:
@@ -126,7 +128,7 @@ with st.sidebar:
     # Переключение режимов
     view_mode = st.radio(
         "Режим просмотра:",
-        ["Карта", "3D траектории", "3D пласты коллекторов", "2D проекция скважины", "2D проекции XY/XZ/YZ", "Разрезы", "Анализ", "🤖 ML предсказания", "➕ Добавить скважину"],
+        ["Карта", "3D траектории", "3D пласты коллекторов", "2D проекция скважины", "2D проекции XY/XZ/YZ", "📊 2D разрез с интерполяцией", "Разрезы", "Анализ", "🤖 ML предсказания", "➕ Добавить скважину"],
         index=0
     )
 
@@ -357,6 +359,10 @@ else:
             # Показать вертикальные линии скважин
             show_vertical = st.checkbox("Вертикальные линии", value=True)
             
+            # Показать интерполированные поверхности
+            show_interpolated = st.checkbox("🌍 Интерполированные слои", value=False,
+                                           help="Показать интерполированные поверхности коллекторов между скважинами")
+            
             st.markdown("#### Статистика")
             st.metric("Всего скважин", len(st.session_state.well_data))
             
@@ -394,7 +400,8 @@ else:
                 st.session_state.las_data,
                 show_trajectories=show_trajectories,
                 show_vertical_layers=show_vertical,
-                show_well_logs=show_logs
+                show_well_logs=show_logs,
+                show_interpolated_surfaces=show_interpolated
             )
             st.plotly_chart(fig_3d_layers, use_container_width=True)
     
@@ -543,6 +550,210 @@ else:
                     st.warning(f"Не удалось создать проекции для {selected_well}")
             else:
                 st.warning("Выберите скважину для отображения")
+    
+    # Режим 2D РАЗРЕЗ С ИНТЕРПОЛЯЦИЕЙ
+    elif view_mode == "📊 2D разрез с интерполяцией":
+        st.header("📊 2D разрез с интерполяцией (Kriging)")
+        
+        st.info("💡 Выберите скважины из списка ниже. Карта показывает выбранные скважины и путь профиля")
+        
+        # Две колонки: карта слева, разрез справа
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.markdown("### 🗺️ Выбор скважин")
+            
+            # Мультиселект для выбора скважин
+            well_list = sorted(list(st.session_state.trajectories.keys()))
+            selected_wells = st.multiselect(
+                "Выберите скважины для разреза (порядок важен!):",
+                well_list,
+                default=st.session_state.selected_wells_for_section,
+                help="Порядок выбора определяет путь профиля через скважины",
+                key="section_well_select"
+            )
+            
+            # Обновляем состояние
+            if selected_wells != st.session_state.selected_wells_for_section:
+                st.session_state.selected_wells_for_section = selected_wells
+            
+            # Кнопки управления
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("🗑️ Очистить", use_container_width=True):
+                    st.session_state.selected_wells_for_section = []
+                    st.rerun()
+            with col_b:
+                if st.button("⬅️ Удалить последнюю", use_container_width=True):
+                    if len(st.session_state.selected_wells_for_section) > 0:
+                        st.session_state.selected_wells_for_section.pop()
+                        st.rerun()
+            
+            # Показываем выбранные скважины с нумерацией
+            if len(selected_wells) > 0:
+                st.markdown("**Порядок скважин в профиле:**")
+                for i, well in enumerate(selected_wells, 1):
+                    st.text(f"{i}. {well}")
+            
+            # Параметры интерполяции
+            st.markdown("---")
+            st.markdown("#### Параметры")
+            
+            corridor_width = st.slider(
+                "Ширина коридора (м)",
+                min_value=50.0,
+                max_value=1000.0,
+                value=250.0,
+                step=50.0,
+                help="Расстояние от профиля для включения данных скважин"
+            )
+            
+            # Показываем карту с выделенными скважинами
+            st.markdown("---")
+            st.markdown("### Карта с выбранными скважинами")
+            
+            # Создаем карту с выделением
+            import plotly.graph_objects as go
+            fig_map = go.Figure()
+            
+            # Все скважины (серые, маленькие)
+            fig_map.add_trace(go.Scatter(
+                x=st.session_state.well_data["X"],
+                y=st.session_state.well_data["Y"],
+                mode="markers+text",
+                marker=dict(size=8, color='lightgray', line=dict(width=1, color='gray')),
+                text=st.session_state.well_data["Well"],
+                textposition="top center",
+                textfont=dict(size=8, color='gray'),
+                name="Все скважины",
+                showlegend=False,
+                hoverinfo="text",
+                hovertext=[f"{w}" for w in st.session_state.well_data["Well"]]
+            ))
+            
+            if len(selected_wells) > 0:
+                # Выбранные скважины (большие, цветные)
+                colors_selected = px.colors.qualitative.Plotly
+                for i, well in enumerate(selected_wells):
+                    well_row = st.session_state.well_data[
+                        st.session_state.well_data["Well"] == well
+                    ]
+                    if not well_row.empty:
+                        row = well_row.iloc[0]
+                        fig_map.add_trace(go.Scatter(
+                            x=[row["X"]],
+                            y=[row["Y"]],
+                            mode="markers+text",
+                            marker=dict(
+                                size=15,
+                                color=colors_selected[i % len(colors_selected)],
+                                line=dict(width=2, color='black')
+                            ),
+                            text=[f"{i+1}"],
+                            textfont=dict(size=12, color='white'),
+                            name=well,
+                            showlegend=False,
+                            hoverinfo="text",
+                            hovertext=[f"{i+1}. {well}<br>X: {row['X']:.1f}<br>Y: {row['Y']:.1f}"]
+                        ))
+                
+                # Линия профиля через выбранные скважины
+                if len(selected_wells) >= 2:
+                    profile_x = []
+                    profile_y = []
+                    for well in selected_wells:
+                        well_row = st.session_state.well_data[
+                            st.session_state.well_data["Well"] == well
+                        ]
+                        if not well_row.empty:
+                            row = well_row.iloc[0]
+                            profile_x.append(row["X"])
+                            profile_y.append(row["Y"])
+                    
+                    fig_map.add_trace(go.Scatter(
+                        x=profile_x,
+                        y=profile_y,
+                        mode="lines",
+                        line=dict(color='red', width=3, dash='dash'),
+                        name="Профиль",
+                        showlegend=False,
+                        hoverinfo="skip"
+                    ))
+            
+            fig_map.update_layout(
+                title="Карта скважин",
+                xaxis_title="X (м)",
+                yaxis_title="Y (м)",
+                height=500,
+                hovermode="closest",
+                template="plotly_white"
+            )
+            fig_map.update_xaxes(scaleanchor="y", scaleratio=1)
+            
+            st.plotly_chart(fig_map, use_container_width=True)
+        
+        with col2:
+            st.markdown("### 📊 2D разрез")
+            
+            # Статистика
+            st.metric("Выбрано скважин", len(selected_wells))
+            
+            if len(selected_wells) >= 2:
+                # Вычисляем длину профиля
+                coords = []
+                for well in selected_wells:
+                    if well in st.session_state.well_data["Well"].values:
+                        well_info = st.session_state.well_data[
+                            st.session_state.well_data["Well"] == well
+                        ].iloc[0]
+                        coords.append((well_info['X'], well_info['Y']))
+                
+                if len(coords) >= 2:
+                    total_length = 0
+                    for i in range(len(coords) - 1):
+                        dx = coords[i+1][0] - coords[i][0]
+                        dy = coords[i+1][1] - coords[i][1]
+                        total_length += np.sqrt(dx**2 + dy**2)
+                    
+                    st.metric("Длина профиля", f"{total_length:.1f} м")
+                
+                # Создаем 2D разрез с интерполяцией
+                fig_section = create_2d_section_with_kriging(
+                    st.session_state.well_data,
+                    st.session_state.trajectories,
+                    st.session_state.las_data,
+                    selected_wells,
+                    corridor_m=corridor_width
+                )
+                
+                if fig_section:
+                    st.plotly_chart(fig_section, use_container_width=True)
+                    
+                    # Легенда
+                    st.markdown("#### Легенда")
+                    st.markdown("""
+                    **Цвета:**
+                    - 🟢 **Зеленый** - коллектор (1.0)
+                    - 🟡 **Желтый** - переходная зона (0.5)
+                    - ⚪ **Серый** - неколлектор (0.0)
+                    
+                    **Маркеры:**
+                    - 🔵 **Синие ромбы** - выбранные скважины на профиле
+                    """)
+                else:
+                    st.warning("⚠️ Не удалось построить разрез. Проверьте наличие данных для выбранных скважин.")
+            elif len(selected_wells) == 1:
+                st.info("👆 Выберите еще хотя бы одну скважину")
+            else:
+                st.info("👆 Выберите 2 или более скважин из списка слева")
+                st.markdown("""
+                **Как использовать:**
+                1. Выберите скважины из выпадающего списка слева
+                2. Порядок выбора определяет путь профиля
+                3. На карте видны выбранные скважины с номерами
+                4. Красная пунктирная линия показывает путь профиля
+                5. Минимум 2 скважины для построения разреза
+                """)
     
     # Режим РАЗРЕЗЫ
     elif view_mode == "Разрезы":
