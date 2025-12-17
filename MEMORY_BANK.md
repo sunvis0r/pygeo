@@ -856,6 +856,37 @@ docker-compose restart postgres
 - **Added:** Comparative analysis between real and predicted geological data
 - **Added:** Statistical metrics and confidence scoring for predictions
 
+### ML Predictor Binary Classification Fix (2025-12-17)
+- **Issue:** ML predictor returning continuous values instead of binary 0/1
+- **Root Cause:** Noise generation and float predictions in [`frontend/modules/ml_predictor.py`](frontend/modules/ml_predictor.py:43)
+- **Solution:**
+  - Removed noise generation from predictions
+  - Enforced binary output with `dtype=int`
+  - Added binary conversion in [`app.py`](app.py:990) with `np.where(predictions >= 0.5, 1, 0)`
+- **Database Schema Update:**
+  - Changed `curve_value` from FLOAT to INTEGER in [`backend/init_db.sql`](backend/init_db.sql:34)
+  - Added constraint: `CHECK (curve_value IN (0, 1))`
+  - Ensures only binary values stored in database
+- **Result:** ML predictions now correctly return 0 (non-collector) or 1 (collector)
+
+### Depth Mapping Corrections (2025-12-17)
+- **Issue:** Negative depth values being saved to database
+- **Root Cause:** Using Z coordinates instead of MD (Measured Depth)
+- **Solution:**
+  - Changed depth range from Z coordinates to MD: `depth_range=(0, depth_range_meters)` in [`app.py`](app.py:975)
+  - Added `np.abs()` protection for depth values in [`app.py`](app.py:993)
+  - Added debug output to track depth_md range
+- **Technical Details:**
+  - MD (Measured Depth): Always positive, 0 to well length
+  - Z Coordinate: Can be negative (below surface)
+  - Database stores MD values, not Z coordinates
+
+### User Experience Improvements (2025-12-17)
+- **Removed:** Auto-refresh behavior after well creation
+- **Reason:** User requested to keep debug output visible in terminal
+- **Change:** Replaced `st.rerun()` with informational message in [`app.py`](app.py:1017,1029)
+- **New Behavior:** Shows success message and navigation hint without page reload
+
 ### Comprehensive Documentation (2025-12-17)
 - **Added:** Complete README.md with database schema, user flow, presentation slides
 - **Added:** Detailed entity descriptions and relationships
@@ -869,6 +900,8 @@ docker-compose restart postgres
 - **Added:** Presentation slides structure with content guidelines
 - **Updated:** Project metrics and achievements
 - **Added:** Future development roadmap
+- **Added:** ML predictor binary classification documentation
+- **Added:** Depth mapping technical details
 
 ---
 
@@ -898,4 +931,4 @@ docker-compose restart postgres
 ---
 
 *Last Updated: 2025-12-17*
-*Version: 1.5 - Integrated ML Well Creation & Complete AI Workflow*
+*Version: 1.6 - ML Binary Classification Fix & Depth Mapping Corrections*
